@@ -19,6 +19,11 @@ Scope is always `(merchant_id, period_from, period_to)`. A run is immutable once
 a period creates a new `reconciliation_runs` row. This is what makes "which numbers did we see on
 the 24th?" answerable.
 
+The two sides are scoped on **different dates**, because they carry different dates for the same
+payment: the ledger side by IST capture date, the bank side by `bank_period(from, to)` — the same
+window shifted forward by the T+2 SLA and widened at the far end by the timing-lag ceiling
+([D-18](decisions.md#d-18--a-reconciliation-run-scopes-its-two-sides-on-different-dates)).
+
 ## Record outcomes
 
 Fixes [C-06](00-corrections.md#c-06-b--matched--exceptions--total_records-is-false-for-two-sided-reconciliation).
@@ -43,6 +48,17 @@ I5  every transaction_id appears in at most one match row per run
 I6  every settlement_id appears in at most one match row per run
 I7  sum(exception.amount_paise) is reported, never silently netted into any revenue figure
 ```
+
+The published `exception_count` is **ledger-side**: exactly the ledger records that are not
+`MATCHED_CLEAN`. Bank rows with no counterpart are written with `side = BANK` and reported as
+`unmatched_bank` — one missing settlement is one discrepancy, not two
+([D-20](decisions.md#d-20--the-published-exception-count-is-ledger-side)). Verification asserts
+both `exception_count == ledger_count - matched_clean` and
+`len(bank exceptions) == unmatched_bank`, so the two readings cannot diverge.
+
+An **empty ledger side raises** rather than reporting a zero match rate: "we matched none" and
+"there were none" are different facts
+([D-22](decisions.md#d-22--an-empty-period-is-refused-not-answered-with-a-zero-match-rate)).
 
 I5 and I6 are database unique constraints, not assertions
 ([02-data-model.md](02-data-model.md#reconciliation)).
@@ -73,8 +89,8 @@ or concurrency.
 
 | # | Rule | Predicate | Confidence |
 | :-: | --- | --- | :-: |
-| 1 | `EXACT_UTR` | `utr` equal, both non-null, `amount_paise` equal | 1.00 |
-| 2 | `REF_AMOUNT` | `external_ref == bank_ref`, `amount_paise` equal | 0.98 |
+| 1 | `EXACT_UTR` | `utr` equal, both non-null, `amount_paise` equal, `lag_days <= 3` | 1.00 |
+| 2 | `REF_AMOUNT` | `external_ref == bank_ref`, `amount_paise` equal, `lag_days <= 3` | 0.98 |
 | 3 | `REF_DATE_WINDOW` | `external_ref == bank_ref`, `\|lag_days\| <= 3` | 0.90 |
 | 4 | `AMOUNT_DATE_WINDOW` | `amount_paise` equal, `\|lag_days\| <= 2`, amount unique among candidates | 0.85 |
 | 5 | `AMOUNT_DATE_CANDIDATE` | `amount_paise` equal, `\|lag_days\| <= 5` | 0.72 |
@@ -82,6 +98,11 @@ or concurrency.
 **Auto-match threshold is `0.85`.** Rules 1–4 auto-match. Rule 5 produces a *candidate* recorded
 on the exception, not a match — it is what the provenance drawer shows when a user asks "why is
 this unmatched?" ([C-08](00-corrections.md#c-08-m--18400-is-defined-two-incompatible-ways)).
+
+Rules 1 and 2 inherit the three-business-day ceiling that the exception table states for
+everything else. The spec left it implicit for them; without it an exactly-matching UTR would pair
+records a month apart, and `TIMING_LAG` would be unreachable for the rules that produce most of
+the pairs.
 
 ### Tie-break key
 

@@ -102,8 +102,9 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 | --- | --- |
 | 0 — Foundations | **Done.** `check` green: ruff, mypy strict, 3 import contracts, money guard, 100% branch coverage on `runtime/` |
 | 1 — Data plane & golden fixture | **Done.** 13 tables + RLS, seed generator, 4 checksummed artifacts, 7 fixture assertions, 91 + 12 tests |
-| 2 — Reconciliation engine | next |
-| 3–12 | not started |
+| 2 — Reconciliation engine | **Done.** 5 rules, greedy one-to-one, shuffle test, 3 read endpoints, 111 + 23 tests |
+| 3 — Tool framework & revenue | next |
+| 4–12 | not started |
 
 ### Notes from Phase 0 worth not rediscovering
 
@@ -134,3 +135,27 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
   isolation tests cannot pass vacuously on an empty database.
 - `runtime/schema.py` is omitted from the coverage gate on purpose — "100% coverage" on a
   declarative table list means only that it was imported.
+
+### Notes from Phase 2 worth not rediscovering
+
+- **The tie-break must be total.** Five keys, the last two being settlement id then transaction id
+  purely so no two candidate pairs can compare equal. Without them the result depends on the sort
+  algorithm, and the shuffle test is what proves it does not.
+- **Rules 1 and 2 needed the lag ceiling added.** The spec named it only for rules 3-5, but the
+  exception table says a lag beyond three business days means no pair at all.
+- **The exception count is ledger-side** (15, not 18). Bank overhang is reported as
+  `unmatched_bank`. → [D-20](docs/decisions.md#d-20--the-published-exception-count-is-ledger-side)
+- **The trust plane sits BELOW tools** in the import contract, because a tool implements
+  `verify()` and `evidence()`. The earlier ordering would have broken on Phase 3's first tool.
+  → [D-21](docs/decisions.md#d-21--the-trust-plane-sits-below-tools-in-the-import-contract)
+- **An empty ledger side raises**; an empty bank side does not.
+  → [D-22](docs/decisions.md#d-22--an-empty-period-is-refused-not-answered-with-a-zero-match-rate)
+- `runtime/db.py` caches its engine, so `tests/conftest.py` disposes it after every test —
+  otherwise an asyncpg pool outlives its event loop and every db test fails on teardown with
+  "Event loop is closed" instead of on anything real.
+- The Phase 2 orchestration lives in `scripts/reconcile.py`, not in `reconciliation/`: that
+  package may not import `verification/`, because the engine must not be able to decide whether
+  its own output is trustworthy. Phase 3 moves it behind the tool contract.
+- **Auth is a stated gap until Phase 8.** The read endpoints connect as the owner role, which is
+  exempt from RLS. The policies are proven by `tests/test_rls.py` as the non-owner role, but
+  `merchant_id` currently selects rather than enforces. Documented in `routes/__init__.py`.

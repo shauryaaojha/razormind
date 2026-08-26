@@ -16,6 +16,7 @@ root_packages =
     intent
     validation
     tools
+    reconciliation
     runtime
     verification
     evidence
@@ -27,6 +28,7 @@ name = The deterministic and trust planes cannot reach the LLM
 type = forbidden
 source_modules =
     tools
+    reconciliation
     runtime
     verification
     evidence
@@ -38,11 +40,17 @@ forbidden_modules =
 [importlinter:contract:2]
 name = Planes depend strictly downward
 type = layers
+# The trust plane sits BELOW tools, not above. A tool implements verify() and
+# evidence() as part of its contract (docs/04-tool-contract.md), so it must be
+# able to import the vocabulary those return. The trust plane reads tool
+# *values* -- passed in as arguments -- never tool modules, which is what keeps
+# the dependency pointing one way.
 layers =
     routes
     orchestrator : intent : validation
-    verification : evidence : provenance
     tools
+    verification : evidence : provenance
+    reconciliation
     runtime
 exhaustive = false
 

@@ -274,4 +274,50 @@ correct for production, unnecessary machinery for a fixture.
 
 **Cost to reverse.** Low, but it changes every checksum, so it is a fixture change.
 
+---
+
+### D-20 — The published exception count is ledger-side
+
+**Decision.** `exception_count` counts **ledger-side** exceptions only: exactly the ledger records
+that are not `MATCHED_CLEAN`. Bank rows with no counterpart are written as exceptions with
+`side = BANK` and reported separately as `unmatched_bank`.
+
+**Why.** The spec's golden block gives `exceptions 15` alongside `unmatched_bank 3`, and 15 is
+reachable two independent ways — `7 + 3 + 2 + 2 + 1` and `ledger_count − matched_clean` — while 18
+is reachable neither way. Beyond arithmetic: one missing settlement is *one* discrepancy, and
+counting it once from each side would inflate every exception total by the size of the bank
+overhang. Verification asserts both identities, so the two definitions cannot silently diverge.
+
+**Cost to reverse.** Low, but it changes a headline number, so it is a documentation change too.
+
+---
+
+### D-21 — The trust plane sits below tools in the import contract
+
+**Decision.** The `import-linter` layers are, top to bottom: `routes`; `orchestrator`/`intent`/
+`validation`; `tools`; `verification`/`evidence`/`provenance`; `reconciliation`; `runtime`.
+
+**Why.** A tool implements `verify()` and `evidence()` as part of its contract
+([04-tool-contract.md](04-tool-contract.md)), so it must be able to import the vocabulary those
+return. The trust plane reads tool *values* — passed in as arguments — never tool modules, which
+is what keeps the dependency pointing one way. The earlier ordering put the trust plane above
+tools and would have broken on Phase 3's first tool.
+
+**Cost to reverse.** Low now, high later — the ordering is what stops a cycle forming.
+
+---
+
+### D-22 — An empty period is refused, not answered with a zero match rate
+
+**Decision.** `reconcile()` raises `EmptyPeriodError` when there are no ledger records. A period
+with ledger records but no bank records reconciles normally, to a rate of zero.
+
+**Why.** "We matched none of them" and "there were none to match" are different facts that a
+`0.000000` match rate renders identically. Invariant 6: incomplete data yields an explicit
+limitation, never an invented, estimated, or zero value. The second case is not incomplete data —
+a bank file that never arrived is a real and reportable answer.
+
+**Cost to reverse.** Low. One guard, and a caller that has to say why.
+
+
 

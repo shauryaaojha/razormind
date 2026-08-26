@@ -65,8 +65,10 @@ audit trail — there is no separate logging path for execution state.
 
 Three mechanisms, all cheap, all in CI:
 
-1. **Import lint.** `tools/`, `verification/`, `evidence/` and `provenance/` may not import
-   `llm/`. Enforced by an `import-linter` contract, not by convention.
+1. **Import lint.** `tools/`, `reconciliation/`, `runtime/`, `verification/`, `evidence/` and
+   `provenance/` may not import `llm/` or a vendor SDK. Enforced by `import-linter` contracts, not
+   by convention. A layers contract additionally fixes the direction of every plane dependency
+   ([D-21](decisions.md#d-21--the-trust-plane-sits-below-tools-in-the-import-contract)).
 2. **No float in money paths.** A test walks every tool's declared output schema and asserts no
    `float` field name ends in `_paise`.
 3. **Grounding gate.** The explainer's output is parsed back into claims and each claim's value
@@ -113,7 +115,8 @@ razormind/
       intent/                 parser.py  schemas.py
       validation/             plan_validator.py  policy.py
       tools/                  base.py  registry.py  finance/  payments/  risk/
-      runtime/                db_queries.py  money.py  calendar.py
+      reconciliation/         models.py  rules.py  engine.py  repository.py
+      runtime/                db.py  schema.py  money.py  calendar.py
       verification/           verifier.py  rules.py
       evidence/               builder.py  formula.py
       provenance/             builder.py

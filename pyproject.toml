@@ -97,6 +97,10 @@ omit = [
     # by `task.py migrate` building it against a real Postgres and by the
     # row-level-security tests querying through it.
     "*/runtime/schema.py",
+    # db.py is connection plumbing with no branches worth asserting in
+    # isolation. It is exercised end to end by `task.py dbtest`, which is
+    # where a broken engine or a missing SET ROLE actually shows up.
+    "*/runtime/db.py",
 ]
 
 [tool.coverage.report]

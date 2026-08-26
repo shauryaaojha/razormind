@@ -110,6 +110,10 @@ resource.
 
 ### `GET /reconciliation/runs?merchant_id=&from=&to=`
 
+Returns `{ "items": [...], "next_cursor": null }`; one item has the shape below. A plural
+endpoint returning a bare object would have no room for a second run over the same period, which
+is exactly what re-running produces.
+
 ```json
 {
   "run_id": "rec_01J8ABC",
@@ -150,7 +154,7 @@ with a decimal library. Money is an integer; only ratios are strings.
       "settlement_id": null,
       "amount_paise": 840000,
       "currency": "INR",
-      "status": "unresolved",
+      "status": "OPEN",
       "detail": {
         "candidates": [
           {

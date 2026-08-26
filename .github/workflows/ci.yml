@@ -56,7 +56,10 @@ jobs:
       - name: Migrate and load the fixture
         run: docker compose run --rm --entrypoint python api scripts/task.py loadseed
 
-      - name: Row-level security is enforced by the database
+      - name: Reconcile the golden window end to end
+        run: docker compose run --rm --entrypoint python api scripts/task.py reconcile
+
+      - name: Row-level security, constraints, and the read endpoints
         run: docker compose run --rm --entrypoint python api scripts/task.py dbtest
 
   web:

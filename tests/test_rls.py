@@ -11,10 +11,13 @@ network.
 """
 
 import os
+from collections.abc import AsyncIterator
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
+
+from runtime.db import acting_as
 
 pytestmark = pytest.mark.db
 
@@ -40,17 +43,21 @@ def _database_url() -> str:
 
 
 @pytest.fixture
-async def connection() -> AsyncConnection:  # type: ignore[misc]
+async def connection() -> AsyncIterator[AsyncConnection]:
     engine = create_async_engine(_database_url())
     async with engine.connect() as conn:
-        await conn.execute(text(f"SET ROLE {APP_ROLE}"))
         yield conn
     await engine.dispose()
 
 
 async def _act_as(conn: AsyncConnection, user_id: str | None) -> None:
-    value = user_id if user_id is not None else ""
-    await conn.execute(text("SELECT set_config('razormind.user_id', :uid, false)"), {"uid": value})
+    """Bind the session to a user, through the same helper the API uses.
+
+    Deliberately `runtime.db.acting_as` rather than an equivalent written here:
+    a test that proves a hand-rolled twin works proves nothing about the code
+    that ships.
+    """
+    await acting_as(conn, user_id if user_id is not None else "")
 
 
 async def _count(conn: AsyncConnection, table: str) -> int:

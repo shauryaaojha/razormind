@@ -45,7 +45,7 @@ before anything non-deterministic touches it.
 ```text
  0  Foundations         scaffold, money/calendar primitives, CI boundary gates  [DONE]
  1  Data plane          schema, seed generator, golden fixture      [DONE]
- 2  Reconciliation      matcher, exceptions, invariants
+ 2  Reconciliation      matcher, exceptions, invariants             [DONE]
  3  Tool framework      the contract + revenue analysis
  4  Remaining tools     failure, refund, chargeback
  5  Trust layer         verification, evidence, provenance
@@ -147,6 +147,7 @@ image, which is why "works on my machine" and "passes CI" are not separate claim
 | `task.py seed` | regenerate the fixture, expectations and checksums |
 | `task.py verify-seed` | the seven fixture assertions |
 | `task.py migrate` / `loadseed` | Alembic, then load `seed.sql` |
+| `task.py reconcile` | reconcile the golden window and persist the run |
 | `task.py test` | pytest, 100% branch coverage required on `runtime/` |
 | `task.py dbtest` | row-level security, against a real Postgres |
 | `task.py dev` / `web` / `psql` | containers, foreground |
@@ -155,10 +156,10 @@ image, which is why "works on my machine" and "passes CI" are not separate claim
 
 ## Status
 
-**Phases 0 and 1 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
-contracts, the no-float guard, the seven fixture assertions, and 91 tests with 100% branch
-coverage on `runtime/money.py` and `runtime/calendar.py`. A further 12 integration tests prove
-row-level security against a real Postgres.
+**Phases 0, 1 and 2 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
+contracts, the no-float guard, the seven fixture assertions, and 111 tests with 100% branch
+coverage on `runtime/money.py` and `runtime/calendar.py`. A further 23 integration tests run
+against a real Postgres.
 
 The three boundary mechanisms exist before any domain logic does, which is the point of the phase:
 
@@ -178,8 +179,21 @@ that regenerate byte-identically. Row-level security is proven the only way it c
 belonging to another merchant runs `SELECT count(*) FROM transactions` with no filter at all and
 gets zero.
 
-**Next: Phase 2 — the reconciliation engine.** Five matching rules, greedy one-to-one assignment
-with a total tie-break, and the shuffle test.
+Phase 2 built the reconciliation engine. Five rules in strict priority order, greedy one-to-one
+assignment with a five-key tie-break that is *total* — so no two candidate pairs can compare
+equal and the result cannot depend on the sort algorithm or on the order rows arrived in. The
+shuffle test reconciles the same records in twenty random orders and demands byte-identical
+output. `SETTLEMENT_91` is found, scored at 0.72, and deliberately not taken; it is recorded as a
+rejected candidate, which is the difference between a 95.61% match rate that can be defended and
+a 99% one that cannot.
+
+Half the design is delegated to the database and tested there: the one-to-one guarantee is a
+unique constraint, the 0.85 auto-match threshold is a `CHECK`, and I1–I3 are `CHECK`s on the run
+row. Each has a test that violates it on purpose — a constraint nobody has tried to break is a
+constraint nobody has checked exists.
+
+**Next: Phase 3 — the tool contract and revenue analysis.** The deterministic tool ABC, the
+registry, the revenue bridge, and the restricted arithmetic interpreter.
 
 ---
 

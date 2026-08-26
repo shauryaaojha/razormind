@@ -30,6 +30,7 @@ __all__ = [
     "NaiveDatetimeError",
     "add_business_days",
     "bank_period",
+    "business_day_lag",
     "business_days_between",
     "effective_capture_date",
     "holidays",
@@ -131,6 +132,23 @@ def business_days_between(start: date, end: date) -> int:
             count += 1
         current += timedelta(days=1)
     return count
+
+
+def business_day_lag(due: date, actual: date) -> int:
+    """Signed business-day lag: negative when the bank paid early.
+
+    ``business_days_between`` is a half-open count and refuses a reversed
+    interval, which is right for measuring a period but wrong for measuring
+    lateness -- an early settlement is a real thing and it is not an error.
+
+    >>> business_day_lag(date(2026, 8, 5), date(2026, 8, 7))
+    2
+    >>> business_day_lag(date(2026, 8, 7), date(2026, 8, 5))
+    -2
+    """
+    if actual >= due:
+        return business_days_between(due, actual)
+    return -business_days_between(actual, due)
 
 
 def effective_capture_date(captured_at: datetime) -> date:
