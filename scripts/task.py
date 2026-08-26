@@ -1,0 +1,211 @@
+"""The single implementation of every project command.
+
+Everything runs **inside Docker**. Nothing is installed on the host -- no venv,
+no global pip. When this script is invoked on the host it re-invokes itself
+inside the ``tools`` container; when it is already inside a container
+(``RAZORMIND_IN_CONTAINER=1``, set in the Dockerfile) it runs the step directly.
+
+So these three are the same thing:
+
+    make check
+    python scripts/task.py check
+    docker compose run --rm tools scripts/task.py check
+
+Usage:  python scripts/task.py <target> [<target> ...]
+        python scripts/task.py --list
+"""
+
+import os
+import subprocess
+import sys
+from collections.abc import Callable
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "apps" / "api" / "src"
+
+IN_CONTAINER = os.environ.get("RAZORMIND_IN_CONTAINER") == "1"
+
+#: Targets that manage containers and therefore must run on the host.
+HOST_ONLY = {"build", "up", "down", "dev", "web", "psql", "shell"}
+
+
+def _run(*args: str) -> int:
+    """Run a Python subcommand in this interpreter, with the API importable."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(SRC), env.get("PYTHONPATH", "")]))
+    print(f"\n$ python {' '.join(args)}", flush=True)
+    return subprocess.call([sys.executable, *args], cwd=str(ROOT), env=env)
+
+
+def _console(*args: str) -> int:
+    """Run an installed console script, with the API importable."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(SRC), env.get("PYTHONPATH", "")]))
+    print(f"\n$ {' '.join(args)}", flush=True)
+    return subprocess.call(list(args), cwd=str(ROOT), env=env)
+
+
+def _compose(*args: str) -> int:
+    """Run a docker compose command on the host."""
+    print(f"\n$ docker compose {' '.join(args)}", flush=True)
+    return subprocess.call(["docker", "compose", *args], cwd=str(ROOT))
+
+
+def _in_tools(*args: str) -> int:
+    """Run a command inside the toolchain container."""
+    return _compose("run", "--rm", "--build", "tools", *args)
+
+
+# --------------------------------------------------------------------------
+# container targets (host only)
+# --------------------------------------------------------------------------
+
+
+def build() -> int:
+    """Build the API image. This is where every download happens."""
+    return _compose("build", "api")
+
+
+def up() -> int:
+    """Start Postgres, the API and the web app."""
+    return _compose("up", "-d", "db", "api", "web")
+
+
+def down() -> int:
+    """Stop everything. Add --volumes by hand to also drop the database."""
+    return _compose("down")
+
+
+def dev() -> int:
+    """Run the API in the foreground with reload. Single worker -- see D-12."""
+    return _compose("up", "--build", "db", "api")
+
+
+def web() -> int:
+    """Run the Next.js dev server in the foreground."""
+    return _compose("up", "--build", "web")
+
+
+def psql() -> int:
+    """Open psql against the local database container."""
+    return _compose("exec", "db", "psql", "-U", "razormind", "-d", "razormind")
+
+
+def shell() -> int:
+    """Interactive shell inside the toolchain container."""
+    return _compose("run", "--rm", "--build", "--entrypoint", "bash", "tools")
+
+
+# --------------------------------------------------------------------------
+# checks (run inside the container)
+# --------------------------------------------------------------------------
+
+
+def lint() -> int:
+    """ruff: lint and format check."""
+    return _run("-m", "ruff", "check", ".") or _run("-m", "ruff", "format", "--check", ".")
+
+
+def fmt() -> int:
+    """ruff: apply formatting and safe fixes."""
+    return _run("-m", "ruff", "check", "--fix", ".") or _run("-m", "ruff", "format", ".")
+
+
+def types() -> int:
+    """mypy --strict."""
+    return _run("-m", "mypy")
+
+
+def boundaries() -> int:
+    """import-linter: the trust boundary contracts in .importlinter."""
+    # The console script, not `python -m importlinter.cli`: that module has no
+    # __main__ guard, so it exits 0 without evaluating a single contract.
+    # tests/test_boundaries.py is what caught it.
+    return _console("lint-imports")
+
+
+def nofloat() -> int:
+    """The C-01 money guard: no float, no rounding outside runtime/money.py."""
+    return _run("scripts/check_no_float.py")
+
+
+def test() -> int:
+    """pytest with branch coverage on runtime/, which must stay at 100%."""
+    return _run("-m", "pytest", "--cov", "--cov-report=term-missing")
+
+
+def check() -> int:
+    """Everything CI runs, in CI's order. The Phase 0 exit criterion."""
+    for step in (lint, types, boundaries, nofloat, test):
+        code = step()
+        if code != 0:
+            print(f"\n>>> {step.__name__} FAILED (exit {code})", file=sys.stderr)
+            return code
+    print("\n>>> check OK")
+    return 0
+
+
+TARGETS: dict[str, Callable[[], int]] = {
+    "build": build,
+    "up": up,
+    "down": down,
+    "dev": dev,
+    "web": web,
+    "psql": psql,
+    "shell": shell,
+    "lint": lint,
+    "fmt": fmt,
+    "types": types,
+    "boundaries": boundaries,
+    "nofloat": nofloat,
+    "test": test,
+    "check": check,
+}
+
+
+def _usage() -> int:
+    print(__doc__)
+    print("Targets:")
+    width = max(len(name) for name in TARGETS)
+    for name, fn in TARGETS.items():
+        summary = (fn.__doc__ or "").strip().splitlines()[0]
+        where = "host " if name in HOST_ONLY else "docker"
+        print(f"  {name.ljust(width)}  [{where}]  {summary}")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if not argv or argv[0] in {"-h", "--help", "--list"}:
+        return _usage()
+
+    unknown = [name for name in argv if name not in TARGETS]
+    if unknown:
+        print(f"unknown target(s): {', '.join(unknown)}", file=sys.stderr)
+        return 2
+
+    if IN_CONTAINER:
+        host_only = [name for name in argv if name in HOST_ONLY]
+        if host_only:
+            print(
+                f"target(s) {', '.join(host_only)} manage containers and cannot run inside one",
+                file=sys.stderr,
+            )
+            return 2
+        for name in argv:
+            code = TARGETS[name]()
+            if code != 0:
+                return code
+        return 0
+
+    # On the host: container targets run here, everything else is delegated
+    # into the toolchain container so that no dependency touches the host.
+    for name in argv:
+        code = TARGETS[name]() if name in HOST_ONLY else _in_tools("scripts/task.py", name)
+        if code != 0:
+            return code
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

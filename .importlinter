@@ -1,0 +1,58 @@
+# Mechanical enforcement of the boundary in docs/01-architecture.md.
+#
+# Invariant 1 ("the LLM never produces an authoritative financial number") is
+# worth nothing as a convention. Contract 1 below is what makes it a build
+# failure. Do not add an ignore_imports entry to it — if a module needs the
+# LLM, it is on the wrong side of the boundary.
+
+[importlinter]
+# `main` is a module, not a package, so import-linter cannot take it as a root.
+# It imports nothing but `routes`, so nothing is lost.
+include_external_packages = True
+root_packages =
+    config
+    routes
+    orchestrator
+    intent
+    validation
+    tools
+    runtime
+    verification
+    evidence
+    provenance
+    llm
+
+[importlinter:contract:1]
+name = The deterministic and trust planes cannot reach the LLM
+type = forbidden
+source_modules =
+    tools
+    runtime
+    verification
+    evidence
+    provenance
+forbidden_modules =
+    llm
+    anthropic
+
+[importlinter:contract:2]
+name = Planes depend strictly downward
+type = layers
+layers =
+    routes
+    orchestrator : intent : validation
+    verification : evidence : provenance
+    tools
+    runtime
+exhaustive = false
+
+[importlinter:contract:3]
+name = Nothing below the agent plane imports a vendor SDK
+type = forbidden
+source_modules =
+    routes
+    orchestrator
+    intent
+    validation
+forbidden_modules =
+    anthropic

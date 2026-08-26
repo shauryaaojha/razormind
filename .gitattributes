@@ -1,0 +1,6 @@
+# LF everywhere. The toolchain runs inside Linux containers; a CRLF shebang
+# line or a CRLF entrypoint fails in ways that are tedious to diagnose.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

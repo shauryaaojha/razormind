@@ -1,0 +1,81 @@
+# Every dependency in this project is downloaded and installed inside a
+# container. Nothing is installed on the host -- no venv, no global pip, no
+# global npm. `docker compose run --rm api ...` is the only way Python runs.
+#
+#   docker compose build            build the API image
+#   docker compose run --rm api python scripts/task.py check
+#   docker compose up db            Postgres only
+#   docker compose up               everything
+
+name: razormind
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: razormind
+      POSTGRES_PASSWORD: razormind
+      POSTGRES_DB: razormind
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # Nothing depends on the database until Phase 1, but the gate is here
+      # from the start so `depends_on` never has to be retrofitted.
+      test: ["CMD-SHELL", "pg_isready -U razormind -d razormind"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      ENVIRONMENT: local
+      DATABASE_URL: postgresql+asyncpg://razormind:razormind@db:5432/razormind
+    volumes:
+      # The repo is mounted so edits are live; PYTHONPATH in the image points
+      # at the mount, so the editable install is not load-bearing.
+      - .:/app
+      # Keep the image's site-packages from being shadowed by the mount.
+      - /app/apps/api/src/razormind_api.egg-info
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Toolchain container: same image, no server, no database. This is what the
+  # task runner shells into for lint / types / boundaries / tests.
+  tools:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      ENVIRONMENT: ci
+    volumes:
+      - .:/app
+    working_dir: /app
+    entrypoint: ["python"]
+    command: ["scripts/task.py", "check"]
+    profiles: ["tools"]
+
+  web:
+    image: node:22-slim
+    working_dir: /app/apps/web
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    volumes:
+      - .:/app
+      - webmodules:/app/apps/web/node_modules
+    ports:
+      - "3000:3000"
+    command: sh -c "npm install && npm run dev -- --hostname 0.0.0.0"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  webmodules:

@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API — lint, types, boundaries, money guard, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the toolchain image
+        # Every dependency is installed inside the container. The runner's own
+        # Python is never used, so CI and a developer laptop run byte-identical
+        # toolchains.
+        run: docker compose build tools
+
+      # Run the gates as separate steps rather than one `check`, so a failure
+      # names itself in the job summary instead of hiding inside a script.
+      - name: ruff
+        run: docker compose run --rm tools scripts/task.py lint
+
+      - name: mypy --strict
+        run: docker compose run --rm tools scripts/task.py types
+
+      - name: import-linter (the trust boundary)
+        run: docker compose run --rm tools scripts/task.py boundaries
+
+      - name: no float in money paths (C-01)
+        run: docker compose run --rm tools scripts/task.py nofloat
+
+      - name: pytest + 100% branch coverage on runtime/
+        run: docker compose run --rm tools scripts/task.py test
+
+  web:
+    name: Web — typecheck and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install and typecheck
+        run: |
+          docker run --rm -v "$PWD":/app -w /app/apps/web node:22-slim \
+            sh -c "npm ci --no-audit --no-fund && npm run typecheck && npm run build"
