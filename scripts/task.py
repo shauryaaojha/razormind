@@ -52,9 +52,19 @@ def _compose(*args: str) -> int:
     return subprocess.call(["docker", "compose", *args], cwd=str(ROOT))
 
 
-def _in_tools(*args: str) -> int:
-    """Run a command inside the toolchain container."""
-    return _compose("run", "--rm", "--build", "tools", *args)
+#: Targets that need Postgres, and so run in the api service (which is on the
+#: compose network and waits for the database to be healthy) rather than in
+#: the standalone tools container.
+NEEDS_DATABASE = {"migrate", "loadseed", "dbtest"}
+
+
+def _in_tools(target: str) -> int:
+    """Run one target inside a container."""
+    if target in NEEDS_DATABASE:
+        return _compose(
+            "run", "--rm", "--build", "--entrypoint", "python", "api", "scripts/task.py", target
+        )
+    return _compose("run", "--rm", "--build", "tools", "scripts/task.py", target)
 
 
 # --------------------------------------------------------------------------
@@ -130,14 +140,42 @@ def nofloat() -> int:
     return _run("scripts/check_no_float.py")
 
 
+def seed() -> int:
+    """Regenerate the fixture: both CSVs, seed.sql, expectations and checksums."""
+    return _run("data/seed/generate_seed_data.py")
+
+
+def verify_seed() -> int:
+    """The seven fixture assertions. Runs before anything trusts the data."""
+    return _run("scripts/verify_seed.py")
+
+
+def migrate() -> int:
+    """Apply migrations to DATABASE_URL."""
+    return _console("alembic", "upgrade", "head")
+
+
+def loadseed() -> int:
+    """Apply migrations, then load seed.sql into the database."""
+    code = migrate()
+    if code != 0:
+        return code
+    return _run("scripts/load_seed.py")
+
+
 def test() -> int:
     """pytest with branch coverage on runtime/, which must stay at 100%."""
     return _run("-m", "pytest", "--cov", "--cov-report=term-missing")
 
 
+def dbtest() -> int:
+    """The integration tests that need a live Postgres (row-level security)."""
+    return _run("-m", "pytest", "-m", "db", "--no-cov", "-q")
+
+
 def check() -> int:
     """Everything CI runs, in CI's order. The Phase 0 exit criterion."""
-    for step in (lint, types, boundaries, nofloat, test):
+    for step in (lint, types, boundaries, nofloat, verify_seed, test):
         code = step()
         if code != 0:
             print(f"\n>>> {step.__name__} FAILED (exit {code})", file=sys.stderr)
@@ -159,6 +197,11 @@ TARGETS: dict[str, Callable[[], int]] = {
     "types": types,
     "boundaries": boundaries,
     "nofloat": nofloat,
+    "seed": seed,
+    "verify-seed": verify_seed,
+    "migrate": migrate,
+    "loadseed": loadseed,
+    "dbtest": dbtest,
     "test": test,
     "check": check,
 }
@@ -201,7 +244,7 @@ def main(argv: list[str]) -> int:
     # On the host: container targets run here, everything else is delegated
     # into the toolchain container so that no dependency touches the host.
     for name in argv:
-        code = TARGETS[name]() if name in HOST_ONLY else _in_tools("scripts/task.py", name)
+        code = TARGETS[name]() if name in HOST_ONLY else _in_tools(name)
         if code != 0:
             return code
     return 0

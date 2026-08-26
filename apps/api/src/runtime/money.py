@@ -11,13 +11,14 @@ Rules (docs/02-data-model.md#money, correction C-01):
 ``scripts/check_no_float.py`` enforces the last rule mechanically.
 """
 
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 
 __all__ = [
     "RATIO_SCALE",
     "Paise",
     "ZeroDenominatorError",
     "apply_rate",
+    "apply_ratio",
     "ratio",
 ]
 
@@ -59,6 +60,28 @@ def apply_rate(amount_paise: Paise, rate: Decimal) -> Paise:
     if not isinstance(rate, Decimal):
         raise TypeError(f"rate must be Decimal, got {type(rate).__name__}")
     return int((Decimal(amount_paise) * rate).quantize(_WHOLE, rounding=ROUND_HALF_UP))
+
+
+def apply_ratio(amount_paise: Paise, numerator: Paise, denominator: Paise) -> Paise:
+    """``amount * numerator / denominator``, rounded half-up **once**.
+
+    The rate/volume attribution needs a proportion applied to a money amount
+    without ever materialising the proportion as a rounded rate first -- doing
+    that twice is how a bridge stops closing. Precision is raised locally so
+    the single rounding is the only one that happens.
+
+    >>> apply_ratio(-58_800_000, 516_000_000, 533_000_000)   # the volume effect
+    -56924579
+    """
+    _require_int(amount_paise, "amount_paise")
+    _require_int(numerator, "numerator")
+    _require_int(denominator, "denominator")
+    if denominator == 0:
+        raise ZeroDenominatorError("apply_ratio denominator is zero")
+    with localcontext() as context:
+        context.prec = 60
+        scaled = Decimal(amount_paise) * Decimal(numerator) / Decimal(denominator)
+    return int(scaled.quantize(_WHOLE, rounding=ROUND_HALF_UP))
 
 
 def ratio(numerator: Paise, denominator: Paise) -> Decimal:

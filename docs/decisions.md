@@ -231,3 +231,47 @@ exactly; only the number moved.
 **Cost to reverse.** Low before Phase 1, high after: changing the minor version changes the RNG
 stream, which changes `data/seed/golden/checksums.json`, which is a fixture change.
 
+---
+
+### D-18 — A reconciliation run scopes its two sides on different dates
+
+**Decision.** A run over `[from, to)` scopes the **ledger** side by IST capture date and the
+**bank** side by `bank_period(from, to)` — the same window shifted forward by the T+2 SLA and
+widened at the far end by the three-business-day timing-lag ceiling. `runtime/calendar.py` owns
+that computation.
+
+**Why.** The two sides carry different dates for the same payment. Scoping both to the same
+literal dates compares two different cohorts and manufactures exceptions out of the boundary:
+captures near the start settled before the window opened, and captures near the end settle after
+it closes. Neither is a real discrepancy, and both would show up in the match rate. The far end is
+widened by exactly the lag ceiling because a settlement later than that is not a late pair
+([03-reconciliation.md](03-reconciliation.md#timing-lag)) — it is no pair at all.
+
+**Alternatives.** Scope the ledger side by `settlement_due_date` as well, which is symmetric but
+splits the revenue population from the reconciliation population. Rejected while both tools read
+the same window.
+
+**Cost to reverse.** Low. One function, and the run's stored `period_from`/`period_to` are
+unchanged either way.
+
+---
+
+### D-19 — The fixture leaves a two-day quiet band before each analysis window
+
+**Decision.** `generate_seed_data.py` writes no captures in the two calendar days immediately
+before an analysis window.
+
+**Why.** A capture just before a window — particularly one after the 18:00 cutoff, which rolls
+into the next business day — settles *inside* that window's settlement cycle. It would appear on
+the bank side with no ledger counterpart in scope: a fabricated `NO_COUNTERPART` born of a
+boundary rather than of anything wrong in the data, and it would move the golden match rate. The
+quiet band makes the capture cohort and the settlement cohort exactly the same payments, which is
+what lets the fixture assert 342 / 341 / 338 exactly.
+
+**Alternatives.** Absorb the spill by scoping the ledger side on `settlement_due_date`
+([D-18](#d-18--a-reconciliation-run-scopes-its-two-sides-on-different-dates) discusses this) —
+correct for production, unnecessary machinery for a fixture.
+
+**Cost to reverse.** Low, but it changes every checksum, so it is a fixture change.
+
+

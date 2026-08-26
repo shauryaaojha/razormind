@@ -77,9 +77,10 @@ disallow_untyped_defs = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-q --strict-markers"
+addopts = "-q --strict-markers -m 'not db'"
 markers = [
     "slow: tests that shell out to another process",
+    "db: integration tests that need a live Postgres (task.py dbtest)",
 ]
 
 # --------------------------------------------------------------------------
@@ -90,6 +91,13 @@ markers = [
 [tool.coverage.run]
 branch = true
 source = ["runtime"]
+omit = [
+    # schema.py is a declarative table list. "100% coverage" on it would mean
+    # only that the module was imported, which proves nothing. It is verified
+    # by `task.py migrate` building it against a real Postgres and by the
+    # row-level-security tests querying through it.
+    "*/runtime/schema.py",
+]
 
 [tool.coverage.report]
 fail_under = 100

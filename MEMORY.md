@@ -101,8 +101,9 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 | Phase | State |
 | --- | --- |
 | 0 — Foundations | **Done.** `check` green: ruff, mypy strict, 3 import contracts, money guard, 100% branch coverage on `runtime/` |
-| 1 — Data plane & golden fixture | in progress |
-| 2–12 | not started |
+| 1 — Data plane & golden fixture | **Done.** 13 tables + RLS, seed generator, 4 checksummed artifacts, 7 fixture assertions, 91 + 12 tests |
+| 2 — Reconciliation engine | next |
+| 3–12 | not started |
 
 ### Notes from Phase 0 worth not rediscovering
 
@@ -114,3 +115,22 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 - Python is pinned to **3.13** in two places that must agree: `requires-python` in
   `pyproject.toml` and the base image in `apps/api/Dockerfile`. The image is the one that decides.
   → [D-17](docs/decisions.md#d-17--python-is-pinned-to-313-not-312)
+
+### Notes from Phase 1 worth not rediscovering
+
+- **The two reconciliation sides are scoped on different dates.** Ledger by IST capture date, bank
+  by `bank_period()` — the same window shifted by T+2 and widened by the lag ceiling. Scoping both
+  to the same literal dates invents exceptions at the edges. → [D-18](docs/decisions.md#d-18--a-reconciliation-run-scopes-its-two-sides-on-different-dates)
+- **The fixture has a two-day quiet band before each window.** A capture just before a window —
+  especially after the 18:00 cutoff — settles *inside* it and would look like an unmatched bank
+  row. → [D-19](docs/decisions.md#d-19--the-fixture-leaves-a-two-day-quiet-band-before-each-analysis-window)
+- Exact totals come from **largest-remainder apportionment**, not from generating and hoping.
+  Every amount is a whole number of rupees, which is what makes the 1.00% fee exact.
+- Scoping *attempts* by capture date silently drops every failure (a failure has no `captured_at`)
+  and every success rate reads 100%. Attempts scope on `attempted_at`, ledger records on
+  `captured_at`.
+- RLS is only meaningful when tested as a **non-owner** role: a table owner is exempt by default.
+  The tests `SET ROLE razormind_app` first, and one test asserts the seed actually loaded so the
+  isolation tests cannot pass vacuously on an empty database.
+- `runtime/schema.py` is omitted from the coverage gate on purpose — "100% coverage" on a
+  declarative table list means only that it was imported.

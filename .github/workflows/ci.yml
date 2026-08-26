@@ -36,8 +36,28 @@ jobs:
       - name: no float in money paths (C-01)
         run: docker compose run --rm tools scripts/task.py nofloat
 
+      # Before the tests, deliberately. Every test below asserts against this
+      # fixture; a drifted fixture makes them wrong and green.
+      - name: verify-seed (the seven fixture assertions)
+        run: docker compose run --rm tools scripts/task.py verify-seed
+
       - name: pytest + 100% branch coverage on runtime/
         run: docker compose run --rm tools scripts/task.py test
+
+  database:
+    name: Database — migrations, seed load, row-level security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the API image
+        run: docker compose build api
+
+      - name: Migrate and load the fixture
+        run: docker compose run --rm --entrypoint python api scripts/task.py loadseed
+
+      - name: Row-level security is enforced by the database
+        run: docker compose run --rm --entrypoint python api scripts/task.py dbtest
 
   web:
     name: Web — typecheck and build

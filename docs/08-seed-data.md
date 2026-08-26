@@ -15,6 +15,9 @@ Fixes [C-15d/C-15e/C-15i](00-corrections.md#c-15-m--other-fixes-applied-without-
 | Timestamps | ISO-8601 with explicit `+05:30` offset |
 | Reproducibility | `make seed` then `make verify-seed` recomputes SHA-256 of both CSVs and compares against `data/seed/golden/checksums.json`. A mismatch fails CI. |
 | Python | Pinned to 3.13 in both `pyproject.toml` and the API image; `rng.shuffle`/`rng.sample` semantics are stable within a minor release, so the image is part of the fixture ([D-17](decisions.md#d-17--python-is-pinned-to-313-not-312)) |
+| Totals | Exact **by construction**. Amounts are apportioned out of a fixed total by largest remainder, so the sum is the target to the paise whatever the random weights do. |
+| Amounts | Every amount is a whole number of rupees. That is what makes the 1.00% fee exact: one percent of a whole-rupee amount is an integer, so per-record fees sum to one percent of the total with no drift. |
+| Ids | Drawn from a seeded shuffle, not assigned chronologically — which is both realistic and what stops the matcher's lexicographic tie-break from accidentally agreeing with time order. It is also why `TXN_183` can sit in the August window. |
 
 The file was named `razorpay_side.csv` in the vision doc, which implies a live integration the
 project explicitly disclaims (vision §43). It is `ledger_side.csv`.
@@ -24,13 +27,21 @@ project explicitly disclaims (vision §43). It is `ledger_side.csv`.
 ```text
 Span             90 days, 2026-05-26 -> 2026-08-24 (IST, half-open)
 Merchant         M123, single merchant, INR only
-Attempts         ~1,600 payment attempts
-Successful       ~1,480
+Attempts         1,620 payment attempts
+Successful       1,502
 Methods          UPI 46.66% of attempted value, CARD, NETBANKING, WALLET
 Analysis window  2026-08-01 -> 2026-08-24   (current, 23 days)
 Comparison       2026-07-01 -> 2026-07-24   (prior,   23 days)
-Reconciliation   scoped to the analysis window: 342 ledger, 341 bank records
+Reconciliation   ledger 2026-08-01 -> 2026-08-24  : 342 records
+                 bank   2026-08-05 -> 2026-09-01  : 341 records
 ```
+
+The two reconciliation windows are not the same dates because the two sides do not carry the same
+date. `bank_period()` shifts the capture window forward by the T+2 SLA and widens the far end by
+the timing-lag ceiling — see [D-18](decisions.md#d-18--a-reconciliation-run-scopes-its-two-sides-on-different-dates).
+The generator leaves a two-day quiet band before each analysis window so the capture cohort and
+the settlement cohort are exactly the same payments
+([D-19](decisions.md#d-19--the-fixture-leaves-a-two-day-quiet-band-before-each-analysis-window)).
 
 The vision doc said "300–500 transactions" while also showing a 342-record reconciliation for a
 23-day window; those cannot both hold. The dataset is ~1,600 attempts over 90 days, of which the
@@ -176,17 +187,27 @@ Each is injected deterministically at a fixed index so the counts never drift:
 
 ## Verification of the fixture itself
 
-`make verify-seed` asserts, before any application code runs:
+`python scripts/task.py verify-seed` asserts, before any application code runs:
 
 ```text
-1. CSV checksums match golden/checksums.json
-2. The bridge identity closes to the paise
-3. Attribution sums to the net change, residual within tolerance
+1. Every artifact matches golden/checksums.json, and regenerates identically
+2. The bridge identity closes to the paise, in both windows
+3. Attribution sums to the net change, with a zero rounding residual
 4. The blended success rate equals the method-mix computation
-5. Reconciliation invariants I1-I6 hold (03-reconciliation.md)
+5. Reconciliation invariants I1-I4 hold, and the identifiers are unique
 6. Exception counts equal the golden breakdown
-7. Unresolved value equals 1840000 paise
+7. Unresolved value equals 1840000 paise across the three named records
 ```
+
+Four artifacts are checksummed, not two: both CSVs, `seed.sql`, and `golden/expectations.json` —
+the machine-readable golden numbers every later phase asserts against. Check 1 also rebuilds the
+dataset in-process and compares, because a generator that is only deterministic when nothing else
+has consumed the RNG is not deterministic.
+
+I5 and I6 are database unique constraints and belong to Phase 2, when match rows exist. What
+Phase 1 proves is that the fixture handed to the matcher is arithmetically capable of satisfying
+them: no repeated transaction id, no repeated settlement id, and exactly one repeated UTR — the
+planted duplicate, which is the whole `POSSIBLE_DUPLICATE` story.
 
 If the fixture is wrong, nothing downstream can be trusted — so these run first, in Phase 1,
 before the reconciliation engine exists.

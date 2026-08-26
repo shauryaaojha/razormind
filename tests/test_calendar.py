@@ -11,9 +11,11 @@ import pytest
 from runtime.calendar import (
     CAPTURE_CUTOFF,
     IST,
+    MAX_TIMING_LAG_BUSINESS_DAYS,
     SETTLEMENT_LAG_BUSINESS_DAYS,
     NaiveDatetimeError,
     add_business_days,
+    bank_period,
     business_days_between,
     effective_capture_date,
     holidays,
@@ -179,3 +181,35 @@ class TestPeriods:
             periods_overlap(
                 date(2026, 8, 1), date(2026, 8, 24), date(2026, 7, 24), date(2026, 7, 1)
             )
+
+
+class TestBankPeriod:
+    """The settlement window that corresponds to a capture window."""
+
+    def test_the_golden_analysis_window(self) -> None:
+        assert bank_period(date(2026, 8, 1), date(2026, 8, 24)) == (
+            date(2026, 8, 5),
+            date(2026, 9, 1),
+        )
+
+    def test_it_opens_at_the_sla_of_the_first_capture(self) -> None:
+        """Aug 1 is a Saturday: the cycle starts Monday, and settles Aug 5."""
+        opens, _ = bank_period(date(2026, 8, 1), date(2026, 8, 24))
+        assert opens == settlement_due_date(datetime(2026, 8, 1, 10, 0, tzinfo=IST))
+
+    def test_it_closes_beyond_the_latest_tolerable_lag(self) -> None:
+        """The last capture in the window, settled as late as a pair allows,
+        must still fall inside -- otherwise a TIMING_LAG would read as a
+        missing bank row."""
+        _, closes = bank_period(date(2026, 8, 1), date(2026, 8, 24))
+        latest_due = settlement_due_date(datetime(2026, 8, 23, 21, 0, tzinfo=IST))
+        latest_pair = add_business_days(latest_due, MAX_TIMING_LAG_BUSINESS_DAYS)
+        assert latest_pair < closes
+
+    def test_it_is_half_open(self) -> None:
+        opens, closes = bank_period(date(2026, 8, 1), date(2026, 8, 24))
+        assert opens < closes
+
+    def test_a_reversed_period_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="is not before end"):
+            bank_period(date(2026, 8, 24), date(2026, 8, 1))

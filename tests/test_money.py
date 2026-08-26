@@ -9,7 +9,13 @@ from decimal import Decimal
 
 import pytest
 
-from runtime.money import RATIO_SCALE, ZeroDenominatorError, apply_rate, ratio
+from runtime.money import (
+    RATIO_SCALE,
+    ZeroDenominatorError,
+    apply_rate,
+    apply_ratio,
+    ratio,
+)
 
 
 class TestApplyRate:
@@ -94,3 +100,47 @@ class TestRatio:
     def test_rejects_bool_denominator(self) -> None:
         with pytest.raises(TypeError, match="denominator must be int, got bool"):
             ratio(1, True)  # mypy allows this; bool is an int
+
+
+class TestApplyRatio:
+    """The rate/volume attribution primitive. One rounding, at the end."""
+
+    def test_the_golden_volume_effect(self) -> None:
+        """docs/08-seed-data.md: prior rate applied to the change in attempts."""
+        assert apply_ratio(-58_800_000, 516_000_000, 533_000_000) == -56_924_578
+
+    def test_the_two_effects_are_exact_complements(self) -> None:
+        """This is what makes the bridge close with a zero residual.
+
+        The rate effect is defined as the remainder of the volume effect, so
+        the pair sums to the change in gross by construction rather than by a
+        second rounding that happens to agree.
+        """
+        attempted_prior, attempted_current = 533_000_000, 474_200_000
+        gross_prior, gross_current = 516_000_000, 428_320_000
+        volume = apply_ratio(attempted_current - attempted_prior, gross_prior, attempted_prior)
+        rate = (gross_current - gross_prior) - volume
+        assert volume + rate == gross_current - gross_prior
+
+    def test_it_never_rounds_twice(self) -> None:
+        """A rate materialised at scale 6 first would give a different answer."""
+        via_rate = apply_rate(1_000_000_000, ratio(1, 3))
+        via_ratio = apply_ratio(1_000_000_000, 1, 3)
+        assert via_ratio == 333_333_333
+        assert via_rate != via_ratio
+
+    def test_half_up_away_from_zero(self) -> None:
+        assert apply_ratio(5, 1, 2) == 3
+        assert apply_ratio(-5, 1, 2) == -3
+
+    def test_zero_denominator_raises(self) -> None:
+        with pytest.raises(ZeroDenominatorError, match="apply_ratio denominator is zero"):
+            apply_ratio(100, 1, 0)
+
+    def test_rejects_non_integers(self) -> None:
+        with pytest.raises(TypeError, match="amount_paise must be int"):
+            apply_ratio(1.0, 1, 2)  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="numerator must be int"):
+            apply_ratio(1, 1.0, 2)  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="denominator must be int"):
+            apply_ratio(1, 1, 2.0)  # type: ignore[arg-type]

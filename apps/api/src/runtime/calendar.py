@@ -25,9 +25,11 @@ from zoneinfo import ZoneInfo
 __all__ = [
     "CAPTURE_CUTOFF",
     "IST",
+    "MAX_TIMING_LAG_BUSINESS_DAYS",
     "SETTLEMENT_LAG_BUSINESS_DAYS",
     "NaiveDatetimeError",
     "add_business_days",
+    "bank_period",
     "business_days_between",
     "effective_capture_date",
     "holidays",
@@ -47,6 +49,9 @@ CAPTURE_CUTOFF = time(18, 0)
 
 SETTLEMENT_LAG_BUSINESS_DAYS = 2
 """T+2, counted in business days from the cutoff-adjusted capture date."""
+
+MAX_TIMING_LAG_BUSINESS_DAYS = 3
+"""Beyond this the pair is not formed at all (docs/03-reconciliation.md)."""
 
 _HOLIDAY_FILE = Path(__file__).resolve().parents[4] / "data" / "seed" / "holidays_2026.json"
 
@@ -143,6 +148,31 @@ def effective_capture_date(captured_at: datetime) -> date:
 def settlement_due_date(captured_at: datetime) -> date:
     """T+2 business days from the cutoff-adjusted capture date."""
     return add_business_days(effective_capture_date(captured_at), SETTLEMENT_LAG_BUSINESS_DAYS)
+
+
+def bank_period(period_from: date, period_to: date) -> tuple[date, date]:
+    """The settlement window that corresponds to a capture window.
+
+    A reconciliation run over ``[from, to)`` scopes the **ledger** side by IST
+    capture date and the **bank** side by value date -- and those are not the
+    same days. Scoping both sides to the same literal dates would compare two
+    different cohorts of payments and manufacture false exceptions at each
+    edge: captures near the start would have settled before the window opened,
+    and captures near the end would settle after it closed.
+
+    So the bank side is the capture window shifted by the settlement SLA, and
+    widened at the far end by the timing-lag ceiling -- a settlement later than
+    that is not a late pair, it is no pair at all.
+
+    >>> bank_period(date(2026, 8, 1), date(2026, 8, 24))
+    (datetime.date(2026, 8, 5), datetime.date(2026, 9, 1))
+    """
+    _require_ordered(period_from, period_to)
+    opens = add_business_days(period_from, SETTLEMENT_LAG_BUSINESS_DAYS)
+    closes = add_business_days(
+        period_to, SETTLEMENT_LAG_BUSINESS_DAYS + MAX_TIMING_LAG_BUSINESS_DAYS
+    )
+    return opens, closes + timedelta(days=1)
 
 
 def period_contains(day: date, period_from: date, period_to: date) -> bool:

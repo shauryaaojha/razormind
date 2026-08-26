@@ -44,7 +44,7 @@ before anything non-deterministic touches it.
 
 ```text
  0  Foundations         scaffold, money/calendar primitives, CI boundary gates  [DONE]
- 1  Data plane          schema, seed generator, golden fixture      <- do not skip
+ 1  Data plane          schema, seed generator, golden fixture      [DONE]
  2  Reconciliation      matcher, exceptions, invariants
  3  Tool framework      the contract + revenue analysis
  4  Remaining tools     failure, refund, chargeback
@@ -139,21 +139,26 @@ image, which is why "works on my machine" and "passes CI" are not separate claim
 
 | Command | What it does |
 | --- | --- |
-| `task.py check` | The full gate, in CI's order. Phase 0's exit criterion |
+| `task.py check` | The full gate, in CI's order |
 | `task.py lint` / `fmt` | ruff |
 | `task.py types` | mypy --strict |
 | `task.py boundaries` | import-linter — the trust boundary |
 | `task.py nofloat` | the C-01 money guard |
-| `task.py test` | pytest, with 100% branch coverage required on `runtime/` |
+| `task.py seed` | regenerate the fixture, expectations and checksums |
+| `task.py verify-seed` | the seven fixture assertions |
+| `task.py migrate` / `loadseed` | Alembic, then load `seed.sql` |
+| `task.py test` | pytest, 100% branch coverage required on `runtime/` |
+| `task.py dbtest` | row-level security, against a real Postgres |
 | `task.py dev` / `web` / `psql` | containers, foreground |
 
 ---
 
 ## Status
 
-**Phase 0 — Foundations: complete.** `check` is green: ruff, mypy `--strict`, three import-linter
-contracts, the no-float guard, and 57 tests with 100% branch coverage on `runtime/money.py` and
-`runtime/calendar.py`.
+**Phases 0 and 1 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
+contracts, the no-float guard, the seven fixture assertions, and 91 tests with 100% branch
+coverage on `runtime/money.py` and `runtime/calendar.py`. A further 12 integration tests prove
+row-level security against a real Postgres.
 
 The three boundary mechanisms exist before any domain logic does, which is the point of the phase:
 
@@ -165,9 +170,16 @@ The three boundary mechanisms exist before any domain logic does, which is the p
 - `runtime/money.py` rejects a `float` rate at runtime, and `bool` as an amount — `bool` is an
   `int` to the type checker, so only the runtime check catches it.
 
-**Next: Phase 1 — data plane and golden fixture.** Migrations, `generate_seed_data.py`,
-`checksums.json`, and the seven fixture assertions. Nothing downstream can be trusted until the
-fixture is provably the one the docs describe.
+Phase 1 added the data plane. Thirteen tables with the one-to-one match constraint and the
+half-open period constraint enforced by the database rather than by the matcher; a seeded
+generator whose totals are exact **by construction** — apportioned out of a fixed total by
+largest remainder, in whole rupees so the 1.00% fee is exact — and four checksummed artifacts
+that regenerate byte-identically. Row-level security is proven the only way it can be: a user
+belonging to another merchant runs `SELECT count(*) FROM transactions` with no filter at all and
+gets zero.
+
+**Next: Phase 2 — the reconciliation engine.** Five matching rules, greedy one-to-one assignment
+with a total tie-break, and the shuffle test.
 
 ---
 
