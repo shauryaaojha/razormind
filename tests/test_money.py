@@ -14,6 +14,8 @@ from runtime.money import (
     ZeroDenominatorError,
     apply_rate,
     apply_ratio,
+    quantize_paise,
+    quantize_ratio,
     ratio,
 )
 
@@ -144,3 +146,46 @@ class TestApplyRatio:
             apply_ratio(1, 1.0, 2)  # type: ignore[arg-type]
         with pytest.raises(TypeError, match="denominator must be int"):
             apply_ratio(1, 1, 2.0)  # type: ignore[arg-type]
+
+
+class TestQuantize:
+    """The rounding step layer 4 of verification lands on.
+
+    ``evidence/formula.py`` evaluates a declared formula exactly and does not
+    round. These are what turn that exact Decimal into the integer or the
+    scale-6 ratio a tool published -- one rounding, in the one module allowed to
+    make one.
+    """
+
+    def test_paise_round_half_up_away_from_zero(self) -> None:
+        assert quantize_paise(Decimal("0.5")) == 1
+        assert quantize_paise(Decimal("-0.5")) == -1
+        assert quantize_paise(Decimal("1.4999")) == 1
+
+    def test_an_exact_integer_is_unchanged(self) -> None:
+        assert quantize_paise(Decimal(-7745268)) == -7745268
+
+    def test_paise_result_is_an_int(self) -> None:
+        assert type(quantize_paise(Decimal("2.5"))) is int
+
+    def test_the_volume_effect_recomputes_from_its_formula(self) -> None:
+        """The golden attribution term, re-derived exactly as the verifier will."""
+        exact = Decimal(43134000 - 51293000) * Decimal(48692000) / Decimal(51293000)
+        assert quantize_paise(exact) == -7745268
+
+    def test_ratios_quantize_to_scale_six(self) -> None:
+        assert quantize_ratio(Decimal("-0.1759555")) == Decimal("-0.175956")
+        assert quantize_ratio(Decimal("0.9561403508771")) == Decimal("0.956140")
+        assert quantize_ratio(Decimal(1)).as_tuple().exponent == RATIO_SCALE.as_tuple().exponent
+
+    def test_a_float_is_refused_not_coerced(self) -> None:
+        """C-01 again: accepting one would make the rounding point unreproducible."""
+        with pytest.raises(TypeError, match="must be Decimal"):
+            quantize_paise(2.5)  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="must be Decimal"):
+            quantize_ratio(0.5)  # type: ignore[arg-type]
+
+    def test_an_int_is_refused_too(self) -> None:
+        """An int is already exact, so passing one means a unit was confused."""
+        with pytest.raises(TypeError, match="must be Decimal"):
+            quantize_paise(3)  # type: ignore[arg-type]

@@ -19,6 +19,8 @@ __all__ = [
     "ZeroDenominatorError",
     "apply_rate",
     "apply_ratio",
+    "quantize_paise",
+    "quantize_ratio",
     "ratio",
 ]
 
@@ -37,6 +39,13 @@ class ZeroDenominatorError(ZeroDivisionError):
     This is a caller error, never a zero result. Invariant 6: incomplete data
     yields an explicit limitation, never an invented, estimated or zero value.
     """
+
+
+def _require_decimal(value: object, name: str) -> Decimal:
+    """Reject anything that is not a Decimal -- a float most of all."""
+    if not isinstance(value, Decimal):
+        raise TypeError(f"{name} must be Decimal, got {type(value).__name__}")
+    return value
 
 
 def _require_int(value: object, name: str) -> int:
@@ -97,3 +106,27 @@ def ratio(numerator: Paise, denominator: Paise) -> Decimal:
     if denominator == 0:
         raise ZeroDenominatorError("ratio denominator is zero")
     return (Decimal(numerator) / Decimal(denominator)).quantize(RATIO_SCALE, rounding=ROUND_HALF_UP)
+
+
+def quantize_paise(exact: Decimal) -> Paise:
+    """Round an exact Decimal to whole paise, half-up.
+
+    The verifier re-evaluates a published formula in exact arithmetic and then
+    has to land on the same integer the tool published. That final step is a
+    rounding, so it belongs here rather than in ``evidence/formula.py`` -- if
+    the two modules each rounded, "the tool and its formula disagree" and "the
+    two roundings disagree" would be indistinguishable failures.
+
+    >>> quantize_paise(Decimal("4283199.5"))
+    4283200
+    """
+    return int(_require_decimal(exact, "exact").quantize(_WHOLE, rounding=ROUND_HALF_UP))
+
+
+def quantize_ratio(exact: Decimal) -> Decimal:
+    """Round an exact Decimal to a scale-6 ratio, half-up.
+
+    >>> quantize_ratio(Decimal("-0.1759555"))
+    Decimal('-0.175956')
+    """
+    return _require_decimal(exact, "exact").quantize(RATIO_SCALE, rounding=ROUND_HALF_UP)

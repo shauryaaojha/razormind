@@ -46,7 +46,7 @@ before anything non-deterministic touches it.
  0  Foundations         scaffold, money/calendar primitives, CI boundary gates  [DONE]
  1  Data plane          schema, seed generator, golden fixture      [DONE]
  2  Reconciliation      matcher, exceptions, invariants             [DONE]
- 3  Tool framework      the contract + revenue analysis
+ 3  Tool framework      the contract + revenue analysis            [DONE]
  4  Remaining tools     failure, refund, chargeback
  5  Trust layer         verification, evidence, provenance
 ------------------------------------------------------------------  first LLM call
@@ -171,6 +171,7 @@ image, which is why "works on my machine" and "passes CI" are not separate claim
 | `task.py verify-seed` | the ten fixture assertions |
 | `task.py migrate` / `loadseed` | Alembic, then load `seed.sql` |
 | `task.py reconcile` | reconcile the golden window and persist the run |
+| `task.py revenue` | the golden revenue bridge, through both v1 tools |
 | `task.py test` | pytest, 100% branch coverage required on `runtime/` |
 | `task.py dbtest` | row-level security, against a real Postgres |
 | `task.py dev` / `web` / `psql` | containers, foreground |
@@ -179,10 +180,9 @@ image, which is why "works on my machine" and "passes CI" are not separate claim
 
 ## Status
 
-**Phases 0, 1 and 2 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
-contracts, the no-float guard, the ten fixture assertions, and 123 tests with 100% branch
-coverage on `runtime/money.py` and `runtime/calendar.py`. A further 25 integration tests run
-against a real Postgres.
+**Phases 0 through 3 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
+contracts, the no-float guard, the ten fixture assertions, and 225 tests with 100% branch
+coverage on `runtime/`. A further 46 integration tests run against a real Postgres.
 
 The three boundary mechanisms exist before any domain logic does, which is the point of the phase:
 
@@ -215,8 +215,66 @@ unique constraint, the 0.85 auto-match threshold is a `CHECK`, and I1–I3 are `
 row. Each has a test that violates it on purpose — a constraint nobody has tried to break is a
 constraint nobody has checked exists.
 
-**Next: Phase 3 — the tool contract and revenue analysis.** The deterministic tool ABC, the
-registry, the revenue bridge, and the restricted arithmetic interpreter.
+Phase 3 put both of those behind the tool contract and added the hard one. Every financial
+number in the system is now produced by a `DeterministicTool`, and the contract is enforced
+rather than described: a subclass missing an `@abstractmethod` fails to instantiate, which is the
+direct fix for C-11 — the original ABC had none, so a tool that forgot `verify` silently
+inherited a no-op body and published unverified numbers.
+
+`run()` owns the order — validate, scope, execute, verify, evidence — so no caller can get it
+wrong, and a failing `VerificationResult` raises before any output leaves the tool.
+
+### The bridge closes, and the largest term is not the story
+
+`finance.revenue_analysis` reproduces the golden bridge to the paise, with a **zero** rounding
+residual, and the attribution table agrees with `ground_truth.json` term for term:
+
+```text
+                          prior          current
+attempts                    429              361
+success rate           0.958042         0.944598
+gross payments   Rs 4,86,920.00   Rs 4,06,260.00
+net revenue      Rs 4,73,424.82   Rs 3,90,122.95
+
+net change       -Rs 83,301.87   (-0.175956)
+  ATTEMPT_VOLUME    -Rs 77,452.68     0.929783
+  SUCCESS_RATE       -Rs 3,207.32     0.038502
+  REFUNDS            -Rs 2,336.00     0.028043
+  FEES                  Rs 418.13    -0.005019
+  CHARGEBACKS          -Rs 724.00     0.008691
+  residual                      0 paise
+```
+
+The volume and rate effects are one rounding and its exact remainder rather than two independent
+roundings — rounding both is how a bridge stops closing, and C-02's stated causes summed to 51%
+of the decline they claimed. Refunds, fees and chargebacks enter as **deltas**, negated. The
+unresolved ₹1,840 is nowhere in the table: it is a `confidence_band_ratio` of `0.004716`, a bound
+on the answer rather than a driver of it.
+
+Reconciliation is an *input* to this, not a report beside it. The fixture has 342 ledger records
+and 341 payments; only the run knows which one is the duplicate, so a revenue figure computed
+without it is overstated by exactly one payment with nothing to indicate it
+([D-32](docs/decisions.md#d-32--reconciliation-is-an-input-to-revenue-not-a-report-published-beside-it)).
+
+### A formula language too weak to be the tool
+
+Layer 4 of verification will re-evaluate each metric's declared formula and demand the same
+number. That check is only worth something if the language cannot re-run the tool, so
+`evidence/formula.py` parses to an AST and admits named operands, integer literals, unary minus,
+`+ - * /` and parentheses. Nothing else. No calls, no attribute access, no subscripts, no `**`,
+no floats, no globals — `__import__` is not special-cased, because it is a call and calls do not
+exist here. It returns an exact unrounded `Decimal`; the single rounding stays in
+`runtime/money.py`.
+
+The integration suite already runs that check for real: every published formula is re-evaluated
+through the interpreter and must land on the published value.
+
+Leaf metrics carry an `Aggregation` instead — operation, field, record set, predicate — because a
+sum over 341 records has no arithmetic to re-evaluate, and giving it a decorative formula would
+make layer 4 a check that passes by construction
+([D-29](docs/decisions.md#d-29--evidence-carries-a-formula-or-an-aggregation-never-both-never-neither)).
+
+**Next: Phase 4 — the remaining three tools and the metric vocabulary registry.**
 
 ---
 

@@ -414,6 +414,111 @@ incident from the actual revenue driver is the finding.
 
 **Cost to reverse.** Low.
 
+---
 
+### D-28 — The trust plane is a strict order, and `evidence()` receives the context
 
+**Decision.** `verification` → `provenance` → `evidence` are ordered layers rather than
+independent siblings, and the tool contract's `evidence()` takes `ctx` alongside `(inp, out)`.
 
+**Why.** Two problems that only appeared once the modules had contents.
+
+The layering was written when all three were empty. Layer 4 of verification re-evaluates a
+declared `Formula`, and the provenance walker resolves an `Evidence` graph — so both must import
+`evidence`, and import-linter siblings may not import each other. `evidence` is a vocabulary; the
+two things that consume it belong above it.
+
+The signature was self-contradictory. [C-15b](00-corrections.md#c-15-m--other-fixes-applied-without-further-discussion)
+requires every `Evidence` row to carry `execution_id`, and the documented
+`evidence(self, inp, out)` hands the tool nothing that knows the execution — the contract made
+its own required field unfillable. Passing the context the tool already receives in `execute` is
+the smallest honest fix. The alternative, a second `EvidenceDraft` type stamped later by a
+builder, defers the linkage and adds a type for no gain.
+
+**Cost to reverse.** Low for the signature. Medium for the layering, since it is mechanically
+enforced and a later module that wants the old shape would have to move.
+
+---
+
+### D-29 — Evidence carries a formula *or* an aggregation, never both, never neither
+
+**Decision.** `Evidence.formula` and `Evidence.aggregation` are mutually exclusive and one is
+mandatory. A derived metric (`net = gross - refunds - fees - chargebacks`) declares a `Formula`
+in the restricted grammar. A leaf metric (`gross` is the sum of 341 amounts) declares an
+`Aggregation` — operation, field, record set, predicate — and cites the records.
+
+**Why.** The docs said "one `Evidence` per metric, each with a `Formula`", and layer 4 recomputes
+each metric from its formula. That works for arithmetic and breaks for aggregates: a sum over 341
+records has no expression to re-evaluate. Two bad options were available, and both would have
+made layer 4 weaker while appearing to satisfy it — write a 341-term expression, or give leaves a
+decorative formula that reproduces the value by construction.
+
+Splitting them keeps both checks real. Layer 4 re-evaluates arithmetic; a leaf is verified by
+re-summing the ids it cites, which is a genuinely independent computation and which layer 5
+already has to reach for.
+
+**Cost to reverse.** Low. Nothing outside the evidence builders reads the distinction yet.
+
+---
+
+### D-30 — A reconciliation run id is derived from the execution, and a replay is idempotent
+
+**Decision.** `run_id = "rec_" + sha256(execution_id | merchant | period)[:20]`. Re-running the
+tool inside the same execution returns the existing run instead of writing a second, and refuses
+with `RUN_SNAPSHOT_CHANGED` if a fresh reconciliation of the same period disagrees with what is
+stored.
+
+**Why.** A tool's contract is that the same inputs against the same snapshot produce
+byte-identical output. `uuid4()` broke that for the one field a client is most likely to store,
+and it made a retry create a second identical run under a new name.
+
+The refusal matters as much as the reuse. A run is immutable so that "which numbers did we see on
+the 24th?" stays answerable; if a replay recomputes different counts, the underlying records moved,
+and silently rewriting the row would destroy the one property immutability exists for. This is
+also the shape Phase 8's `client_request_id` idempotency needs.
+
+**Cost to reverse.** Low.
+
+---
+
+### D-31 — A refund belongs to the period of the payment it reverses
+
+**Decision.** Refunds and chargebacks are scoped to a window by their **parent transaction**,
+never by their own `created_at`. Payments are scoped by IST **attempt** date.
+
+**Why.** A revenue bridge nets one cohort's returns against that cohort's gross. A refund raised
+on 26 August against an August payment is August's; counting it in September would deduct one
+cohort's returns from another cohort's gross, and the bridge would still close — around the wrong
+number.
+
+It is not hypothetical: scoping this fixture's refunds by `created_at` moves one of eighteen into
+the wrong window. The rule was checked against the generator before it was written, not after.
+
+Payments scope on `attempted_at` for the reason recorded in Phase 1: a failure has no capture
+instant, so scoping on capture drops every failure and every success rate reads 100%.
+
+**Cost to reverse.** Medium — the choice is baked into what `gross_payments_paise` means, and any
+stored evidence would describe the old rule.
+
+---
+
+### D-32 — Reconciliation is an input to revenue, not a report published beside it
+
+**Decision.** `finance.revenue_analysis` takes a `run_id`, and the run changes the answer: ledger
+rows the run flagged `POSSIBLE_DUPLICATE` are excluded from gross. The run's unresolved value is
+carried too, and changes nothing — it is published as `confidence_band_ratio`.
+
+**Why.** The fixture has 342 ledger records and 341 payments; the difference is a second ledger
+row carrying an existing UTR and amount. It is a real record and it is not revenue. Only the
+reconciliation run knows which one it is, so a revenue figure computed without the run is
+overstated by exactly one payment, with nothing to indicate it.
+
+Keeping the two kinds of contribution distinct is the point. One is an adjustment to the number;
+the other is a bound on how much of the number the bank has confirmed. Netting the unresolved
+value in was the third of [C-02](00-corrections.md#c-02-b--the-flagship-demos-revenue-bridge-does-not-close)'s
+three errors, and it stays out (Invariant 7).
+
+The comparison period is deliberately **not** reconciled, and the tool says so in `limitations`
+rather than implying a symmetry it does not have.
+
+**Cost to reverse.** Medium. Removing the dependency would silently change `gross_payments_paise`.

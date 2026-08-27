@@ -12,7 +12,6 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from scripts.reconcile import run_reconciliation
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from main import API_PREFIX, create_app
@@ -20,6 +19,7 @@ from reconciliation.models import ReconciliationResult
 from reconciliation.repository import new_run_id, write_run
 from runtime.db import connection
 from runtime.schema import reconciliation_matches
+from tools.finance.reconciliation import run_reconciliation
 
 pytestmark = pytest.mark.db
 

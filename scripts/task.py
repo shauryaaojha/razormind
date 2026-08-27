@@ -55,7 +55,7 @@ def _compose(*args: str) -> int:
 #: Targets that need Postgres, and so run in the api service (which is on the
 #: compose network and waits for the database to be healthy) rather than in
 #: the standalone tools container.
-NEEDS_DATABASE = {"migrate", "loadseed", "reconcile", "dbtest"}
+NEEDS_DATABASE = {"migrate", "loadseed", "reconcile", "revenue", "dbtest"}
 
 
 def _in_tools(target: str) -> int:
@@ -146,7 +146,7 @@ def seed() -> int:
 
 
 def verify_seed() -> int:
-    """The seven fixture assertions. Runs before anything trusts the data."""
+    """The ten fixture assertions. Runs before anything trusts the data."""
     return _run("scripts/verify_seed.py")
 
 
@@ -166,6 +166,11 @@ def loadseed() -> int:
 def reconcile() -> int:
     """Reconcile the golden window against the database and persist the run."""
     return _run("scripts/reconcile.py")
+
+
+def revenue() -> int:
+    """The golden revenue bridge, through finance.reconciliation then finance.revenue_analysis."""
+    return _run("scripts/revenue.py")
 
 
 def test() -> int:
@@ -207,6 +212,7 @@ TARGETS: dict[str, Callable[[], int]] = {
     "migrate": migrate,
     "loadseed": loadseed,
     "reconcile": reconcile,
+    "revenue": revenue,
     "dbtest": dbtest,
     "test": test,
     "check": check,

@@ -8,7 +8,9 @@ for the other.
 """
 
 import uuid
+from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -25,11 +27,36 @@ from runtime.schema import (
 from .models import BankRecord, LedgerRecord, ReconciliationResult
 
 __all__ = [
+    "StoredRun",
     "load_bank_records",
     "load_ledger_records",
     "new_run_id",
+    "read_run",
     "write_run",
 ]
+
+
+@dataclass(frozen=True)
+class StoredRun:
+    """A run as the database holds it.
+
+    Read back so a caller can tell "this run already exists and says the same
+    thing" from "this run already exists and says something else". A run is
+    immutable, so the second is a conflict rather than something to overwrite.
+    """
+
+    id: str
+    merchant_id: str
+    period_from: date
+    period_to: date
+    ledger_count: int
+    bank_count: int
+    matched_pairs: int
+    matched_clean: int
+    matched_with_exception: int
+    unmatched_ledger: int
+    unmatched_bank: int
+    clean_match_rate_ratio: Decimal
 
 
 def new_run_id() -> str:
@@ -132,6 +159,29 @@ async def load_bank_records(
         )
         for row in rows
     ]
+
+
+async def read_run(conn: AsyncConnection, run_id: str) -> StoredRun | None:
+    """The stored run, or ``None``."""
+    row = (
+        await conn.execute(select(reconciliation_runs).where(reconciliation_runs.c.id == run_id))
+    ).one_or_none()
+    if row is None:
+        return None
+    return StoredRun(
+        id=row.id,
+        merchant_id=row.merchant_id,
+        period_from=row.period_from,
+        period_to=row.period_to,
+        ledger_count=row.ledger_count,
+        bank_count=row.bank_count,
+        matched_pairs=row.matched_pairs,
+        matched_clean=row.matched_clean,
+        matched_with_exception=row.matched_with_exception,
+        unmatched_ledger=row.unmatched_ledger,
+        unmatched_bank=row.unmatched_bank,
+        clean_match_rate_ratio=row.clean_match_rate_ratio,
+    )
 
 
 async def write_run(

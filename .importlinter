@@ -45,11 +45,20 @@ type = layers
 # able to import the vocabulary those return. The trust plane reads tool
 # *values* -- passed in as arguments -- never tool modules, which is what keeps
 # the dependency pointing one way.
+#
+# verification / provenance / evidence were siblings until Phase 3, which is
+# wrong in a way that only showed up once they had contents: the verifier
+# re-evaluates a declared Formula (layer 4) and the provenance walker resolves
+# an Evidence graph, so both must import `evidence`, and siblings may not
+# import each other. Ordering them strictly is the honest shape -- `evidence`
+# is a vocabulary, and the two things that consume it sit above it (D-28).
 layers =
     routes
     orchestrator : intent : validation
     tools
-    verification : evidence : provenance
+    verification
+    provenance
+    evidence
     reconciliation
     runtime
 exhaustive = false

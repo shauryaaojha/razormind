@@ -113,9 +113,10 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 | --- | --- |
 | 0 — Foundations | **Done.** `check` green: ruff, mypy strict, 3 import contracts, money guard, 100% branch coverage on `runtime/` |
 | 1 — Data plane & golden fixture | **Done**, then reworked to a market-calibrated pipeline (D-23…D-27). 13 tables + RLS, calibration layer, scenario, ground truth, 10 fixture assertions |
-| 2 — Reconciliation engine | **Done.** 5 rules, greedy one-to-one, shuffle test, per-instrument fee rule, 4 read endpoints. 123 + 25 tests |
-| 3 — Tool framework & revenue | next |
-| 4–12 | not started |
+| 2 — Reconciliation engine | **Done.** 5 rules, greedy one-to-one, shuffle test, per-instrument fee rule, 4 read endpoints |
+| 3 — Tool framework & revenue | **Done.** `DeterministicTool` ABC + registry, `finance.reconciliation`, `finance.revenue_analysis`, restricted formula interpreter. 225 + 46 tests |
+| 4 — Remaining tools | next |
+| 5–12 | not started |
 
 ### Notes from Phase 0 worth not rediscovering
 
@@ -137,7 +138,8 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
   especially after the 18:00 cutoff — settles *inside* it and would look like an unmatched bank
   row. → [D-19](docs/decisions.md#d-19--the-fixture-leaves-a-two-day-quiet-band-before-each-analysis-window)
 - Exact totals come from **largest-remainder apportionment**, not from generating and hoping.
-  Every amount is a whole number of rupees, which is what makes the 1.00% fee exact.
+  Every amount is a whole number of rupees, which is what keeps the per-instrument fee schedule
+  landing on documented rates rather than on rounding artefacts.
 - Scoping *attempts* by capture date silently drops every failure (a failure has no `captured_at`)
   and every success rate reads 100%. Attempts scope on `attempted_at`, ledger records on
   `captured_at`.
@@ -164,9 +166,9 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 - `runtime/db.py` caches its engine, so `tests/conftest.py` disposes it after every test —
   otherwise an asyncpg pool outlives its event loop and every db test fails on teardown with
   "Event loop is closed" instead of on anything real.
-- The Phase 2 orchestration lives in `scripts/reconcile.py`, not in `reconciliation/`: that
-  package may not import `verification/`, because the engine must not be able to decide whether
-  its own output is trustworthy. Phase 3 moves it behind the tool contract.
+- The Phase 2 orchestration lived in `scripts/reconcile.py` because `reconciliation/` may not
+  import `verification/` — the engine must not decide whether its own output is trustworthy.
+  Phase 3 moved it behind `finance.reconciliation`; the script is now a thin CLI.
 - **Auth is a stated gap until Phase 8.** The read endpoints connect as the owner role, which is
   exempt from RLS. The policies are proven by `tests/test_rls.py` as the non-owner role, but
   `merchant_id` currently selects rather than enforces. Documented in `routes/__init__.py`.
@@ -192,3 +194,43 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 - The original ₹40L / ₹18,400 figures implied a **₹12,560 average ticket** — about 10× a realistic
   Indian P2M ticket. Calibration exposed that; the merchant is now ~₹4L/month and the unresolved
   value scales with it.
+
+### Notes from Phase 3 worth not rediscovering
+
+- **`run()` on the base class owns the order** — validate, scope, execute, verify, evidence. Put
+  it anywhere else and every caller re-implements it, and one of them gets it wrong. A failing
+  `VerificationResult` raises there, before any output leaves the tool.
+- **A leaf metric has no formula to re-evaluate.** `gross_payments_paise` is a sum over 341
+  records. It carries an `Aggregation` and the verifier re-sums the cited ids; giving it a
+  synthetic expression would make layer 4 a check that passes by construction.
+  → [D-29](docs/decisions.md#d-29--evidence-carries-a-formula-or-an-aggregation-never-both-never-neither)
+- **`evidence()` needs `ctx`.** The documented `(inp, out)` signature could not fill the
+  `execution_id` that C-15b requires on every row — the contract made its own required field
+  unfillable. → [D-28](docs/decisions.md#d-28--the-trust-plane-is-a-strict-order-and-evidence-receives-the-context)
+- **`verification` / `provenance` / `evidence` are now a strict order, not siblings.** Both the
+  verifier and the provenance walker must import `evidence`, and import-linter siblings may not
+  import each other. This only surfaced once the modules had contents.
+- **Formula operand names are short and unit-free** (`gross`, `prior`), with `operands` mapping
+  each to an evidence id. A literal expression containing `x_paise / y` would trip the C-01 money
+  guard, which scans source text and cannot tell a string from code.
+- **The interpreter never rounds.** It returns an exact `Decimal`; `runtime.money.quantize_paise`
+  and `quantize_ratio` are the single rounding. Otherwise "the tool disagrees with its formula"
+  and "the two roundings disagree" are indistinguishable failures.
+- **The run id is derived from the execution**, so a replay returns the existing run instead of
+  writing a second — and refuses with `RUN_SNAPSHOT_CHANGED` if a fresh reconciliation of the same
+  period disagrees with what is stored. `uuid4()` broke determinism on the field clients store.
+  → [D-30](docs/decisions.md#d-30--a-reconciliation-run-id-is-derived-from-the-execution-and-a-replay-is-idempotent)
+- **A refund belongs to the period of the payment it reverses**, never to its own `created_at`.
+  Scoping this fixture's refunds by `created_at` moves one of eighteen into the wrong window.
+  → [D-31](docs/decisions.md#d-31--a-refund-belongs-to-the-period-of-the-payment-it-reverses)
+- **Revenue needs the reconciliation run to be correct.** 342 ledger records, 341 payments; only
+  the run knows which is the duplicate, so gross computed without it is overstated by exactly one
+  payment. → [D-32](docs/decisions.md#d-32--reconciliation-is-an-input-to-revenue-not-a-report-published-beside-it)
+- **The output carries its own source record ids.** `evidence(inp, out, ctx)` is handed nothing
+  else, and a tool that re-queries to explain itself gets a second chance to disagree with the
+  first.
+- Pydantic v2 uses `@dataclass_transform`, so a type checker synthesises `__init__` from the field
+  annotations — passing a `dict` where a sub-model is declared needs an explicit ignore even
+  without the mypy plugin.
+- `DeterministicTool` is invariant in its type parameters, so the registry stores
+  `DeterministicTool[Any, Any]`. The concrete types are recovered at the call site.

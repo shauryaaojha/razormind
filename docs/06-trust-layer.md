@@ -20,11 +20,18 @@ Registered metrics (v1):
 
 ```text
 finance.reconciliation      ledger_count, bank_count, matched_pairs_count,
-                            clean_match_rate_ratio, exception_count,
-                            unresolved_exception_value_paise
-finance.revenue_analysis    gross_payments_paise, refunds_paise, fees_paise,
-                            chargebacks_paise, net_revenue_paise,
-                            net_revenue_change_ratio, attribution[]
+                            matched_clean_count, clean_match_rate_ratio,
+                            exception_count, unresolved_exception_value_paise
+finance.revenue_analysis    attempted_value_paise, gross_payments_paise,
+                            refunds_paise, fees_paise, chargebacks_paise,
+                            net_revenue_paise, net_revenue_change_paise,
+                            net_revenue_change_ratio, rounding_residual_paise,
+                            confidence_band_ratio,
+                            attribution.attempt_volume_effect_paise,
+                            attribution.success_rate_effect_paise,
+                            attribution.refunds_effect_paise,
+                            attribution.fees_effect_paise,
+                            attribution.chargebacks_effect_paise
 payments.failure_analysis   attempted_value_paise, succeeded_value_paise,
                             failed_value_paise, success_rate_ratio,
                             success_rate_pp_change, by_method[]
@@ -36,6 +43,16 @@ risk.chargeback_analysis    chargeback_value_paise, chargeback_count,
 
 An id not on this list cannot be published, cited, or claimed. Adding one is a code change plus a
 docs change, deliberately.
+
+`attribution[]` is written out as five metric ids rather than left as an array. An array of
+unnamed terms cannot be cited: "the attribution says −₹77,452" has no id to resolve, and grounding
+check 2 has nothing to look up. `matched_clean_count` is listed because it is the numerator of
+`clean_match_rate_ratio`, and an operand that is not itself a metric is where a provenance chain
+stops.
+
+`attempted_value_paise` is published by **two** tools, and that is the point: it is the same
+quantity computed from the same reconciled set, so the consistency layer has something to compare.
+Two tools that disagree about it is a defect nothing else would catch.
 
 ## Verification
 
@@ -108,7 +125,14 @@ the original had no execution or tool linkage and an unparseable `calculation: s
 ```python
 class Formula(BaseModel):
     expression: str                 # "gross - refunds - fees - chargebacks"
-    operands: dict[str, str]        # operand name -> metric id or literal
+    operands: dict[str, str]        # operand name -> evidence id, cross-tool metric, or literal
+    unit: Literal["paise", "ratio", "pp", "count"]
+
+class Aggregation(BaseModel):
+    operation: Literal["SUM", "COUNT"]
+    field_name: str                 # "amount_paise"
+    over: str                       # "transactions"
+    predicate: str                  # the record set, in words
     unit: Literal["paise", "ratio", "pp", "count"]
 
 class Evidence(BaseModel):
@@ -120,8 +144,11 @@ class Evidence(BaseModel):
     metric_id: str
     unit: str
     value: int | Decimal
+    period_from: str
+    period_to: str
 
-    formula: Formula
+    formula: Formula | None         # exactly one of these two
+    aggregation: Aggregation | None
     inputs: dict[str, int | Decimal]
 
     source_record_ids: list[str]
@@ -129,10 +156,32 @@ class Evidence(BaseModel):
     verification_checks: list[str]
 ```
 
-`Formula.expression` is a restricted arithmetic grammar — `+ - * /`, parentheses, named
-operands — evaluated by a small interpreter in `evidence/formula.py`. Not `eval`. It is
+`Formula.expression` is a restricted arithmetic grammar — `+ - * /`, parentheses, named operands,
+integer literals — evaluated by a small interpreter in `evidence/formula.py`. Not `eval`. There
+are no calls, no attribute access, no subscripts, no `**`, no floats, and no globals of any kind;
+`__import__` is not special-cased, because it is a call and calls do not exist here. It is
 deliberately too weak to express anything but arithmetic, which is what makes layer 4 of
-verification a real check instead of a re-run of the tool.
+verification a real check instead of a re-run of the tool. The interpreter returns an **exact,
+unrounded** `Decimal`; rounding to paise or to a scale-6 ratio is a separate single step in
+`runtime.money`, so "the tool and its formula disagree" and "two roundings disagree" stay
+distinguishable failures.
+
+**A metric has a formula or an aggregation, never both**
+([D-29](decisions.md#d-29--evidence-carries-a-formula-or-an-aggregation-never-both-never-neither)).
+A derived metric declares arithmetic and layer 4 re-evaluates it. A leaf — `gross_payments_paise`
+is the sum of 341 amounts — has no arithmetic to re-evaluate and declares the fold instead;
+verification re-sums the ids it cites, which is an independent computation rather than a formula
+that reproduces the value by construction.
+
+Operand names in the expression are short and unit-free (`gross`, `prior`), and `operands` maps
+each to the evidence id that supports it. That keeps the C-01 guard — which forbids `/` applied
+to a `_paise` name — meaningful rather than something a string literal can trip, and it is what
+lets the provenance drawer be a generic recursive renderer: every operand either resolves to more
+evidence or terminates.
+
+`period_from` and `period_to` are part of the identity, not decoration. A revenue analysis
+publishes `net_revenue_paise` for two windows, and two rows carrying the same `metric_id` with no
+way to tell them apart is how a prior-period number ends up cited as a current-period one.
 
 ## Provenance
 
@@ -141,9 +190,9 @@ Every authoritative number resolves to source records.
 ```text
 Claim  "Revenue declined 17.60%"
   -> Metric        net_revenue_change_ratio
-  -> Verified      -0.180000
-  -> Formula       (net_current - net_prior) / net_prior
-  -> Operands      net_current_paise=4097868, net_prior_paise=4997400
+  -> Verified      -0.175956
+  -> Formula       (current - prior) / prior
+  -> Operands      current=39012295, prior=47342482
   -> Each operand  -> its own Evidence -> its own Formula
   -> Leaves        transaction ids, settlement ids, refund ids, chargeback ids
   -> Match         reconciliation_matches row (rule, confidence, reason)
