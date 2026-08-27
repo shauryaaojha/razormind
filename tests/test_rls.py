@@ -12,6 +12,7 @@ network.
 
 import os
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 from sqlalchemy import text
@@ -112,8 +113,20 @@ async def test_a_member_cannot_see_another_users_membership(
 
 
 async def test_the_seed_actually_loaded(connection: AsyncConnection) -> None:
-    """Guards against a vacuously green suite: zero rows everywhere passes
-    every isolation test above for entirely the wrong reason."""
+    """Guards against a vacuously green suite.
+
+    Zero rows everywhere passes every isolation test above for entirely the
+    wrong reason. The expected counts come from the generated ground truth
+    rather than being written here, so a regenerated fixture cannot leave this
+    test asserting a number nothing produces any more.
+    """
+    import json
+
+    truth = json.loads(
+        (
+            Path(__file__).resolve().parents[1] / "data" / "seed" / "golden" / "ground_truth.json"
+        ).read_text(encoding="utf-8")
+    )
     await _act_as(connection, OWNER)
-    assert await _count(connection, "transactions") == 1620
-    assert await _count(connection, "settlements") == 1498
+    assert await _count(connection, "transactions") == truth["transaction_count"]
+    assert await _count(connection, "settlements") == truth["settlement_count"]

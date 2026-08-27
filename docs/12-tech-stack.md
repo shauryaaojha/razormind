@@ -234,13 +234,13 @@ shadcn is copied-in components rather than a dependency, which suits a UI with u
 
 One module, `lib/format.ts`, owns every conversion:
 
-- Paise integers → `₹42,83,200.00` with the Indian digit grouping (lakh/crore, not thousands)
+- Paise integers → `₹3,90,122.95` with the Indian digit grouping (lakh/crore, not thousands)
 - Ratio strings → percentages, parsed with a decimal library, **never** `parseFloat`
 - Exception enum → display label, the single map from
   [C-09](00-corrections.md#c-09-m--exception-category-names-are-inconsistent)
 
 Nothing else in the web app formats a number. The Indian grouping is a real requirement, not
-cosmetic — `42,83,200` and `4,283,200` are the same value written two ways, and a finance user
+cosmetic — `3,90,122` and `390,122` are the same value written two ways, and a finance user
 reads the first one faster.
 
 ### Streaming

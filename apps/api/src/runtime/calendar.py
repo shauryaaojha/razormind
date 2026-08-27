@@ -151,21 +151,33 @@ def business_day_lag(due: date, actual: date) -> int:
     return -business_days_between(actual, due)
 
 
-def effective_capture_date(captured_at: datetime) -> date:
+def effective_capture_date(captured_at: datetime, cutoff: time = CAPTURE_CUTOFF) -> date:
     """The settlement cycle a capture joins.
 
     The IST capture date, pushed to the next day if the capture was at or after
-    the 18:00 cutoff, then rolled forward to a business day.
+    the cutoff, then rolled forward to a business day.
     """
     day = ist_date(captured_at)
-    if captured_at.astimezone(IST).time() >= CAPTURE_CUTOFF:
+    if captured_at.astimezone(IST).time() >= cutoff:
         day += timedelta(days=1)
     return add_business_days(day, 0)
 
 
-def settlement_due_date(captured_at: datetime) -> date:
-    """T+2 business days from the cutoff-adjusted capture date."""
-    return add_business_days(effective_capture_date(captured_at), SETTLEMENT_LAG_BUSINESS_DAYS)
+def settlement_due_date(
+    captured_at: datetime,
+    lag_business_days: int = SETTLEMENT_LAG_BUSINESS_DAYS,
+    cutoff: time = CAPTURE_CUTOFF,
+) -> date:
+    """When the bank is expected to pay, from the cutoff-adjusted capture date.
+
+    The lag and the cutoff are **parameters with defaults**, not constants. No
+    universal statutory settlement SLA exists for Indian payment gateways; T+2
+    from 18:00 IST is a common commercial term, and a scenario may set another
+    ([D-25](../../../docs/decisions.md)). Hard-coding it would be inventing a
+    regulation, and the reconciliation engine would then be untestable against
+    any merchant on different terms.
+    """
+    return add_business_days(effective_capture_date(captured_at, cutoff), lag_business_days)
 
 
 def bank_period(period_from: date, period_to: date) -> tuple[date, date]:

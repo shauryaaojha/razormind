@@ -1,0 +1,218 @@
+{
+  "attribution": {
+    "net_change_paise": -8330187,
+    "net_change_ratio": "-0.175956",
+    "rounding_residual_paise": 0,
+    "terms": {
+      "attempt_volume_paise": -7745268,
+      "chargebacks_paise": -72400,
+      "fees_paise": 41813,
+      "refunds_paise": -233600,
+      "success_rate_paise": -320732
+    }
+  },
+  "current": {
+    "attempt_count": 361,
+    "attempted_value_paise": 43134000,
+    "business_decline_ratio": "0.033241",
+    "by_method": {
+      "CARD": {
+        "attempt_count": 58,
+        "business_decline_ratio": "0.051724",
+        "capture_count": 54,
+        "fees_paise": 218788,
+        "gross_paise": 15390000,
+        "mean_ticket_paise": 285000,
+        "success_rate_ratio": "0.931034",
+        "technical_decline_ratio": "0.017241",
+        "value_share_ratio": "0.378821",
+        "volume_share_ratio": "0.160665"
+      },
+      "NETBANKING": {
+        "attempt_count": 21,
+        "business_decline_ratio": "0.047619",
+        "capture_count": 20,
+        "fees_paise": 24000,
+        "gross_paise": 8400000,
+        "mean_ticket_paise": 420000,
+        "success_rate_ratio": "0.952381",
+        "technical_decline_ratio": "0.000000",
+        "value_share_ratio": "0.206764",
+        "volume_share_ratio": "0.058172"
+      },
+      "UPI": {
+        "attempt_count": 260,
+        "business_decline_ratio": "0.026923",
+        "capture_count": 246,
+        "fees_paise": 0,
+        "gross_paise": 15744000,
+        "mean_ticket_paise": 64000,
+        "success_rate_ratio": "0.946154",
+        "technical_decline_ratio": "0.026923",
+        "value_share_ratio": "0.387535",
+        "volume_share_ratio": "0.720222"
+      },
+      "WALLET": {
+        "attempt_count": 22,
+        "business_decline_ratio": "0.045455",
+        "capture_count": 21,
+        "fees_paise": 18017,
+        "gross_paise": 1092000,
+        "mean_ticket_paise": 52000,
+        "success_rate_ratio": "0.954545",
+        "technical_decline_ratio": "0.000000",
+        "value_share_ratio": "0.026879",
+        "volume_share_ratio": "0.060942"
+      }
+    },
+    "capture_count": 341,
+    "chargebacks_paise": 174700,
+    "effective_fee_rate_ratio": "0.006420",
+    "fees_paise": 260805,
+    "gross_payments_paise": 40626000,
+    "net_revenue_paise": 39012295,
+    "period_from": "2026-08-01",
+    "period_to": "2026-08-24",
+    "refunds_paise": 1178200,
+    "success_rate_ratio": "0.944598",
+    "technical_decline_ratio": "0.022161"
+  },
+  "incident": {
+    "affected_issuers": [
+      "BANK_A",
+      "BANK_B",
+      "BANK_C"
+    ],
+    "affected_method": "UPI",
+    "end": "2026-08-19",
+    "expected_diagnosis": {
+      "affected_issuers": [
+        "BANK_A",
+        "BANK_B",
+        "BANK_C"
+      ],
+      "affected_method": "UPI",
+      "must_not_conclude": "the technical-decline incident explains the revenue decline",
+      "primary_driver": "attempt_volume_decline",
+      "secondary_driver": "technical_payment_failures"
+    },
+    "incident_id": "upi_issuer_degradation",
+    "start": "2026-08-09",
+    "technical_decline_ratio_affected": "0.095890",
+    "technical_decline_ratio_unaffected": "0.000000"
+  },
+  "merchant_id": "M123",
+  "prior": {
+    "attempt_count": 429,
+    "attempted_value_paise": 51293000,
+    "business_decline_ratio": "0.034965",
+    "by_method": {
+      "CARD": {
+        "attempt_count": 69,
+        "business_decline_ratio": "0.057971",
+        "capture_count": 64,
+        "fees_paise": 252369,
+        "gross_paise": 18240000,
+        "mean_ticket_paise": 285000,
+        "success_rate_ratio": "0.927536",
+        "technical_decline_ratio": "0.014493",
+        "value_share_ratio": "0.374600",
+        "volume_share_ratio": "0.160839"
+      },
+      "NETBANKING": {
+        "attempt_count": 25,
+        "business_decline_ratio": "0.040000",
+        "capture_count": 24,
+        "fees_paise": 28800,
+        "gross_paise": 10080000,
+        "mean_ticket_paise": 420000,
+        "success_rate_ratio": "0.960000",
+        "technical_decline_ratio": "0.000000",
+        "value_share_ratio": "0.207016",
+        "volume_share_ratio": "0.058275"
+      },
+      "UPI": {
+        "attempt_count": 309,
+        "business_decline_ratio": "0.029126",
+        "capture_count": 298,
+        "fees_paise": 0,
+        "gross_paise": 19072000,
+        "mean_ticket_paise": 64000,
+        "success_rate_ratio": "0.964401",
+        "technical_decline_ratio": "0.006472",
+        "value_share_ratio": "0.391687",
+        "volume_share_ratio": "0.720280"
+      },
+      "WALLET": {
+        "attempt_count": 26,
+        "business_decline_ratio": "0.038462",
+        "capture_count": 25,
+        "fees_paise": 21449,
+        "gross_paise": 1300000,
+        "mean_ticket_paise": 52000,
+        "success_rate_ratio": "0.961538",
+        "technical_decline_ratio": "0.000000",
+        "value_share_ratio": "0.026698",
+        "volume_share_ratio": "0.060606"
+      }
+    },
+    "capture_count": 411,
+    "chargebacks_paise": 102300,
+    "effective_fee_rate_ratio": "0.006215",
+    "fees_paise": 302618,
+    "gross_payments_paise": 48692000,
+    "net_revenue_paise": 47342482,
+    "period_from": "2026-07-01",
+    "period_to": "2026-07-24",
+    "refunds_paise": 944600,
+    "success_rate_ratio": "0.958042",
+    "technical_decline_ratio": "0.006993"
+  },
+  "provenance": {
+    "aggregate_calibration": "NPCI UPI statistics; RBI payment system indicators",
+    "disclaimer": "Transaction-level records are synthetic. Aggregate distributions and operational characteristics are calibrated against public NPCI/RBI statistics. No real customer or merchant transaction data is represented.",
+    "parameter_counts": {
+      "ASSUMED": 12,
+      "CITED": 10,
+      "DERIVED": 0
+    },
+    "sources": "data/calibration/sources.md",
+    "transaction_records": "synthetic, seeded"
+  },
+  "reconciliation": {
+    "bank_count": 341,
+    "bank_period_from": "2026-08-05",
+    "bank_period_to": "2026-09-01",
+    "clean_match_rate_ratio": "0.956140",
+    "duplicate_transaction_id": "TXN_511",
+    "exception_count": 15,
+    "exceptions_by_category": {
+      "AMOUNT_MISMATCH": 2,
+      "FEE_DISCREPANCY": 2,
+      "NO_COUNTERPART": 3,
+      "POSSIBLE_DUPLICATE": 1,
+      "TIMING_LAG": 7
+    },
+    "ledger_count": 342,
+    "matched_clean": 327,
+    "matched_pairs": 338,
+    "matched_with_exception": 11,
+    "period_from": "2026-08-01",
+    "period_to": "2026-08-24",
+    "rejected_candidate_settlement_id": "SETTLEMENT_91",
+    "unmatched_bank": 3,
+    "unmatched_ledger": 4,
+    "unresolved_paise": 184000,
+    "unresolved_transaction_ids": [
+      "TXN_183",
+      "TXN_247",
+      "TXN_402"
+    ]
+  },
+  "scenario_id": "revenue_decline_v1",
+  "seed": 42,
+  "settlement_count": 1540,
+  "span_from": "2026-05-26",
+  "span_to": "2026-08-24",
+  "transaction_count": 1618
+}

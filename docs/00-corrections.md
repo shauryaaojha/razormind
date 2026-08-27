@@ -1,5 +1,14 @@
 # 00 — Spec Corrections
 
+> **This document is a record, not a live specification.** It catalogues defects found in the
+> original vision document and the correction adopted for each. The *reasoning* still stands and
+> the defect classes are still the ones the system guards against — but the figures below describe
+> the fixture as it was before the dataset became market-calibrated. The bridge no longer closes at
+> −18.00% because the fee model is no longer a flat 1%, and the unresolved value is ₹1,840 rather
+> than ₹18,400 because calibrated ticket sizes made the original merchant implausible. For the live
+> numbers see [08-seed-data.md](08-seed-data.md) and
+> [D-23…D-27](decisions.md#d-23--the-dataset-is-market-calibrated-not-arbitrary).
+
 Defects found in the original vision document (`file.md`) that would break a build, and the
 correction adopted. Every corrected number in this repo is verified arithmetically; the checks
 live in `tests/test_golden_story.py` (Phase 1).
@@ -235,7 +244,7 @@ that returns the finished answer.
 | C-15d | `random.seed(42)` mutates global state and is not reproducible across call order | `rng = random.Random(42)`, plus a SHA-256 golden-fixture assertion |
 | C-15e | "300–500 transactions" contradicts a 342-record reconciliation window | dataset is ~1,600 attempts over 90 days; 342 ledger records in the current 23-day window |
 | C-15f | §11 validates currency; §44 excludes multi-currency | single currency `INR`, enforced; non-INR rejected as `UNSUPPORTED_CURRENCY` |
-| C-15g | `FEE_DISCREPANCY` is a category with no tolerance | fee is 1.00% of gross, half-up to paise; tolerance is `max(Rs 1.00, 0.5% of expected fee)` |
+| C-15g | `FEE_DISCREPANCY` is a category with no tolerance | tolerance is `max(Rs 1.00, 0.5% of expected fee)`. The expected fee itself later moved from a flat 1% to a per-instrument schedule ([D-24](decisions.md#d-24--fees-are-per-instrument-and-the-flat-1-is-gone)) |
 | C-15h | Grounding "regenerate once" has no persisted counter or terminal state | `grounding_attempts` on the execution; terminal marker `TEMPLATE_FALLBACK` |
 | C-15i | `razorpay_side.csv` implies a live integration the project explicitly disclaims (§43) | renamed `ledger_side.csv` |
 | C-15j | Redis excluded, but SSE + async execution across multiple workers requires shared state | v0–v1 pinned to a single uvicorn worker; documented trigger for adding Redis |

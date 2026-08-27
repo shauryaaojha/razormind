@@ -63,60 +63,83 @@ Full detail, exit criteria and "do not build yet" lists: [10-build-phases.md](do
 
 ---
 
-## The golden story
+## The data, and what is claimed about it
 
-Every headline number is asserted against a checksummed synthetic dataset
-([08-seed-data.md](docs/08-seed-data.md)).
+> **Transaction-level records are synthetic and seeded.** No real customer, merchant, or bank
+> record is represented. Aggregate distributions and operational characteristics are **calibrated
+> against public NPCI/RBI statistics**; failure rates are not Razorpay's.
+
+```text
+public NPCI / RBI statistics  ->  calibration parameters  ->  scenario  ->  generator
+                                  (every one tagged)          (the world)     |
+                                                                              v
+                                            ledger + settlements + ground_truth.json
+```
+
+Every calibration parameter carries a provenance tag — `CITED`, `DERIVED` or `ASSUMED` — redeemed
+with a URL and a retrieval date in [`data/calibration/sources.md`](data/calibration/sources.md).
+`ASSUMED` is not an apology: one merchant's payment mix is not a published statistic and never will
+be. What matters is that a design choice is never mistaken for an observation. `GET /api/v1/provenance`
+serves the whole picture, generated from the calibration layer rather than written by hand.
+
+**Counts are designed; money is derived.** The scenario fixes capture counts and planted anomaly
+counts. Failures, ticket values, fees, success rates and the revenue decline itself all emerge
+([D-26](docs/decisions.md#d-26--counts-are-designed-money-is-derived)).
+
+### Volume share is not value share
+
+The most important calibration fact, and the one an arbitrary generator always gets wrong:
+
+| Method | Volume share | Value share | Mean ticket |
+| --- | ---: | ---: | ---: |
+| `UPI` | 0.720222 | 0.387535 | Rs 640 |
+| `CARD` | 0.160665 | 0.378821 | Rs 2,850 |
+| `NETBANKING` | 0.058172 | 0.206764 | Rs 4,200 |
+| `WALLET` | 0.060942 | 0.026879 | Rs 520 |
+
+UPI is 72% of the payments and 39% of the money, because its ticket is small.
+
+### Fees follow the instrument
+
+Bank-account UPI and RuPay debit are **zero-MDR by mandate**; PPI-funded UPI carries an interchange
+above ₹2,000; cards carry a negotiated rate; netbanking is billed flat. The blended effective rate
+that falls out is **0.006420** — nothing like the flat 1% this replaced,
+because the volume-dominant rail is free
+([D-24](docs/decisions.md#d-24--fees-are-per-instrument-and-the-flat-1-is-gone)).
+
+That is what makes a `FEE_DISCREPANCY` a finding: the engine names the instrument whose rule would
+have produced the fee the bank actually charged.
+
+### The story
 
 | | Prior (Jul 1–23) | Current (Aug 1–23) |
 | --- | ---: | ---: |
-| Gross successful | ₹51,60,000 | ₹42,83,200 |
-| Refunds | ₹1,00,000 | ₹1,24,000 |
-| Fees @ 1.00% | ₹51,600 | ₹42,832 |
-| Chargebacks | ₹11,000 | ₹18,500 |
-| **Net revenue** | **₹49,97,400** | **₹40,97,868** |
+| Attempts | 429 | 361 |
+| Success rate | 0.958042 | 0.944598 |
+| **Technical declines** | **0.006993** | **0.022161** |
+| Business declines | 0.034965 | 0.033241 |
+| Gross successful | Rs 4,86,920 | Rs 4,06,260 |
+| Fees | Rs 3,026 | Rs 2,608 |
+| **Net revenue** | **Rs 4,73,424** | **Rs 3,90,122** |
 
-Decline ₹8,99,532 = **exactly −18.00%**, fully attributed:
+Decline **-Rs 83,301 = -0.175956**, fully attributed with a
+**zero** rounding residual. Technical declines roughly triple while business declines stay flat —
+that asymmetry is what attributes the movement to the platform rather than to customers.
 
-```text
-Attempt-volume decline (-11.03%)   -Rs 5,69,246   63.3%
-Payment success rate (-6.49 pp)    -Rs 3,07,554   34.2%
-Refund increase                       -Rs 24,000    2.7%
-Chargeback increase                    -Rs 7,500    0.8%
-Fee decrease (offset)                  +Rs 8,768   -1.0%
-Rounding residual                          Rs 0     0.0%
--------------------------------------------------------
-Total                              -Rs 8,99,532  100.0%
-```
+There is a real incident: `upi_issuer_degradation`, 2026-08-09 to 2026-08-19, UPI at
+BANK_A, BANK_B, BANK_C, running **0.095890**
+technical declines against **0.000000** everywhere else.
 
-Reconciliation over the same window: 342 ledger / 341 bank records, 338 pairs, 327 clean,
-15 exceptions, **95.61%** clean match rate, ₹18,400 unresolved across 3 records — reported as a
-±0.45% confidence band, never folded into the bridge.
+**And it is not what moved revenue.** Attempt volume is. The incident is the salient event in the
+window, and a model reasoning from narrative rather than arithmetic will name it as the cause —
+separating a genuine operational incident from the actual revenue driver is the finding
+([D-27](docs/decisions.md#d-27--the-ground-truth-is-checked-against-its-own-dataset)).
 
----
-
-## Stack
-
-| Layer | Choice | Host |
-| --- | --- | --- |
-| Web | Next.js (App Router) · React · TypeScript · Tailwind · shadcn/ui | Vercel |
-| API | Python 3.13 · FastAPI · Pydantic v2 · asyncio | Railway / Render |
-| Data | PostgreSQL 16 + Auth via Supabase, with row-level security | Supabase |
-| LLM | Provider abstraction; Claude (`claude-opus-5`) as the default | Anthropic API |
-| Contract | OpenAPI generated from FastAPI → typed TS client | CI gate |
-
-Two choices carry more weight than the rest:
-
-- **`import-linter` is part of the stack, not the tooling.** A CI contract stops `tools/`,
-  `verification/`, `evidence/` and `provenance/` from importing `llm/`. Invariant 1 is only worth
-  something if it is mechanically enforced.
-- **No LangChain, no RAG, no task queue.** The LLM makes two narrow calls — parse an intent,
-  phrase verified numbers. A framework that abstracts planning, tool calling and output parsing
-  into one layer would hide the exact boundary this project exists to make visible.
-
-Redis is deliberately excluded until the API needs a second worker
-([D-12](docs/decisions.md#d-12--single-uvicorn-worker-redis-deferred)). Full reasoning for every
-choice, and what was excluded, in [12-tech-stack.md](docs/12-tech-stack.md).
+Reconciliation over the same window: 342 ledger / 341 bank
+records, 338 pairs, 327 clean, 15
+exceptions, **0.956140** clean match rate,
+Rs 1,840 unresolved across 3 records — reported as a confidence band,
+never folded into the bridge.
 
 ---
 
@@ -145,7 +168,7 @@ image, which is why "works on my machine" and "passes CI" are not separate claim
 | `task.py boundaries` | import-linter — the trust boundary |
 | `task.py nofloat` | the C-01 money guard |
 | `task.py seed` | regenerate the fixture, expectations and checksums |
-| `task.py verify-seed` | the seven fixture assertions |
+| `task.py verify-seed` | the ten fixture assertions |
 | `task.py migrate` / `loadseed` | Alembic, then load `seed.sql` |
 | `task.py reconcile` | reconcile the golden window and persist the run |
 | `task.py test` | pytest, 100% branch coverage required on `runtime/` |
@@ -157,8 +180,8 @@ image, which is why "works on my machine" and "passes CI" are not separate claim
 ## Status
 
 **Phases 0, 1 and 2 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
-contracts, the no-float guard, the seven fixture assertions, and 111 tests with 100% branch
-coverage on `runtime/money.py` and `runtime/calendar.py`. A further 23 integration tests run
+contracts, the no-float guard, the ten fixture assertions, and 123 tests with 100% branch
+coverage on `runtime/money.py` and `runtime/calendar.py`. A further 25 integration tests run
 against a real Postgres.
 
 The three boundary mechanisms exist before any domain logic does, which is the point of the phase:
@@ -174,7 +197,7 @@ The three boundary mechanisms exist before any domain logic does, which is the p
 Phase 1 added the data plane. Thirteen tables with the one-to-one match constraint and the
 half-open period constraint enforced by the database rather than by the matcher; a seeded
 generator whose totals are exact **by construction** — apportioned out of a fixed total by
-largest remainder, in whole rupees so the 1.00% fee is exact — and four checksummed artifacts
+largest remainder, in whole rupees — and checksummed artifacts
 that regenerate byte-identically. Row-level security is proven the only way it can be: a user
 belonging to another merchant runs `SELECT count(*) FROM transactions` with no filter at all and
 gets zero.

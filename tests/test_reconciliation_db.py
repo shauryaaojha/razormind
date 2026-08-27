@@ -189,7 +189,7 @@ async def test_the_run_summary_endpoint(
     assert summary["matched_pairs_count"] == 338
     assert summary["matched_clean_count"] == 327
     assert summary["exception_count"] == 15
-    assert summary["unresolved_exception_value_paise"] == 1_840_000
+    assert summary["unresolved_exception_value_paise"] == 184_000
     assert summary["exception_breakdown"] == {
         "AMOUNT_MISMATCH": 2,
         "FEE_DISCREPANCY": 2,
@@ -227,7 +227,7 @@ async def test_the_exception_endpoint_shows_the_rejected_candidate(
     assert len(items) == 3
 
     txn_183 = next(item for item in items if item["transaction_id"] == "TXN_183")
-    assert txn_183["amount_paise"] == 840_000
+    assert txn_183["amount_paise"] == 84_000
     assert txn_183["status"] == "OPEN"
     candidate = txn_183["detail"]["candidates"][0]
     assert candidate["settlement_id"] == "SETTLEMENT_91"
@@ -290,3 +290,50 @@ async def test_the_match_endpoint_returns_both_source_records(
     assert body["settlement"]["id"] == row.settlement_id
     assert body["transaction"]["utr"] == body["settlement"]["utr"]
     assert body["transaction"]["amount_paise"] == body["settlement"]["amount_paise"]
+
+
+# --------------------------------------------------------------------------
+# data provenance
+# --------------------------------------------------------------------------
+
+
+async def test_the_provenance_endpoint_answers_where_the_data_came_from(
+    client: httpx.AsyncClient,
+) -> None:
+    """The claim has to be narrow, and it has to be checkable.
+
+    Synthetic records, calibrated aggregates, tagged parameters. Both CITED and
+    ASSUMED must be present: all-CITED would be a lie about a single merchant's
+    payment mix, and all-ASSUMED would mean the calibration layer is decoration.
+    """
+    response = await client.get(f"{API_PREFIX}/provenance")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["transaction_records"] == "synthetic, seeded"
+    assert "NPCI" in body["aggregate_calibration"]
+    assert body["sources_document"] == "data/calibration/sources.md"
+    assert body["scenario_id"] == "revenue_decline_v1"
+    assert "synthetic" in body["disclaimer"].lower()
+    assert body["parameter_counts"]["CITED"] > 0
+    assert body["parameter_counts"]["ASSUMED"] > 0
+    assert set(body["checksums"]) >= {"ledger_side.csv", "bank_settlement.csv"}
+
+
+async def test_the_provenance_endpoint_publishes_the_fee_schedule(
+    client: httpx.AsyncClient,
+) -> None:
+    """Zero-MDR rails are visible as zero, with their citation attached.
+
+    This is what makes a FEE_DISCREPANCY defensible: a reader can see the rule
+    the expected fee came from rather than being asked to trust a percentage.
+    """
+    body = (await client.get(f"{API_PREFIX}/provenance")).json()
+    by_instrument = {rule["instrument"]: rule for rule in body["fee_schedule"]}
+
+    assert by_instrument["UPI_BANK_ACCOUNT"]["mdr_rate"] == "0"
+    assert by_instrument["UPI_BANK_ACCOUNT"]["provenance"] == "CITED"
+    assert by_instrument["RUPAY_DEBIT"]["mdr_rate"] == "0"
+    # A commercial agreement is not a published statistic, and says so.
+    assert by_instrument["CREDIT_CARD"]["provenance"] == "ASSUMED"
+    assert by_instrument["UPI_PPI_WALLET"]["threshold_paise"] == 200_000

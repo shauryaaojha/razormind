@@ -12,7 +12,7 @@ Fixes [C-01](00-corrections.md#c-01-b--money-representation-was-never-specified)
 | Rates | `Decimal` with explicit scale. Fee rate is `Decimal("0.0100")`. |
 | Ratios | `Decimal` in `[0, 1]`, scale 6. Field suffix `_ratio`. |
 | Rounding | `ROUND_HALF_UP`, applied **once** per calculation at the documented point. |
-| Display | Formatting to `₹42,83,200.00` happens only in the web layer. |
+| Display | Formatting to `₹3,90,122.95` happens only in the web layer. |
 
 `runtime/money.py` is the only module allowed to round:
 
@@ -69,7 +69,9 @@ and `execution_events`.
 
 ```text
 merchants          id, name, currency, created_at
-transactions       id, merchant_id, external_ref, utr, method, status,
+transactions       id, merchant_id, external_ref, utr,
+                   method, instrument, issuer, status,
+                   decline_type, decline_reason,
                    amount_paise, fee_paise, currency,
                    attempted_at, captured_at, settlement_due_date, created_at
 settlements        id, merchant_id, bank_ref, utr,
@@ -79,7 +81,21 @@ chargebacks        id, merchant_id, transaction_id, amount_paise, reason, create
 ```
 
 `transactions.status` ∈ `{ATTEMPTED, FAILED, CAPTURED, SETTLED, REFUNDED}`.
-`transactions.method` ∈ `{UPI, CARD, NETBANKING, WALLET}`.
+
+`transactions.method` is the **rail** ∈ `{UPI, CARD, NETBANKING, WALLET}`.
+`transactions.instrument` is the **funding source**, and the funding source is what decides the
+fee ∈ `{UPI_BANK_ACCOUNT, UPI_PPI_WALLET, UPI_RUPAY_CREDIT, RUPAY_DEBIT, OTHER_DEBIT, CREDIT_CARD,
+NETBANKING, WALLET}`. Bank-account UPI carries no MDR; the same rail funded from a prepaid wallet
+carries an interchange ([D-24](decisions.md#d-24--fees-are-per-instrument-and-the-flat-1-is-gone)).
+
+`transactions.decline_type` ∈ `{TECHNICAL_DECLINE, BUSINESS_DECLINE}`, null on a success. NPCI
+distinguishes these and publishes both per bank; a `CHECK` makes a failure without a type
+impossible, because the split degrading into "some rows have it" would make every decline rate
+computed from it quietly wrong.
+
+`transactions.issuer` is the bank. Without it an incident cannot be localised, and "UPI is failing"
+is as far as any investigation can get.
+
 `transactions.utr` is nullable — a missing UTR is precisely what forces the weaker matching rules.
 
 ### Reconciliation

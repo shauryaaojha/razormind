@@ -36,8 +36,10 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 __all__ = [
+    "DECLINE_TYPES",
     "EXCEPTION_CATEGORIES",
     "EXECUTION_STATUSES",
+    "INSTRUMENTS",
     "MATCH_RULES",
     "MERCHANT_ROLES",
     "MERCHANT_SCOPED_TABLES",
@@ -67,7 +69,30 @@ METADATA = MetaData()
 # --------------------------------------------------------------------------
 
 TRANSACTION_STATUSES = ("ATTEMPTED", "FAILED", "CAPTURED", "SETTLED", "REFUNDED")
+
+#: The *rail*.
 PAYMENT_METHODS = ("UPI", "CARD", "NETBANKING", "WALLET")
+
+#: The *funding source*, which is what decides the fee. A UPI payment funded
+#: from a bank account carries no MDR; the same rail funded from a prepaid
+#: wallet carries an interchange. Collapsing the two is what makes a flat fee
+#: model unable to represent a real fee discrepancy.
+INSTRUMENTS = (
+    "UPI_BANK_ACCOUNT",
+    "UPI_PPI_WALLET",
+    "UPI_RUPAY_CREDIT",
+    "RUPAY_DEBIT",
+    "OTHER_DEBIT",
+    "CREDIT_CARD",
+    "NETBANKING",
+    "WALLET",
+)
+
+#: NPCI distinguishes these and publishes both per bank, monthly. A technical
+#: decline is the platform's problem and spikes during an incident; a business
+#: decline is the customer's and stays flat. An investigation that cannot
+#: separate them can only report that a success rate moved.
+DECLINE_TYPES = ("TECHNICAL_DECLINE", "BUSINESS_DECLINE")
 MERCHANT_ROLES = ("OWNER", "ANALYST", "VIEWER")
 MATCH_RULES = (
     "EXACT_UTR",
@@ -160,7 +185,11 @@ transactions = Table(
     # matching rules (docs/03-reconciliation.md).
     Column("utr", Text, nullable=True),
     Column("method", Text, nullable=False),
+    Column("instrument", Text, nullable=False),
+    Column("issuer", Text, nullable=False),
     Column("status", Text, nullable=False),
+    Column("decline_type", Text, nullable=True),
+    Column("decline_reason", Text, nullable=True),
     Column("amount_paise", BigInteger, nullable=False),
     Column("fee_paise", BigInteger, nullable=False),
     Column("currency", String(3), nullable=False, server_default=text("'INR'")),
@@ -169,7 +198,18 @@ transactions = Table(
     Column("settlement_due_date", Date, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=_NOW),
     _one_of("method", PAYMENT_METHODS),
+    _one_of("instrument", INSTRUMENTS),
     _one_of("status", TRANSACTION_STATUSES),
+    CheckConstraint(
+        "decline_type IS NULL OR decline_type IN ('TECHNICAL_DECLINE', 'BUSINESS_DECLINE')",
+        name="ck_transactions_decline_type_valid",
+    ),
+    # A failure must say which kind it was, and a success must not claim one.
+    # Without this the TD/BD split degrades silently into "some rows have it".
+    CheckConstraint(
+        "(status = 'FAILED') = (decline_type IS NOT NULL)",
+        name="ck_transactions_decline_type_agrees_with_status",
+    ),
     CheckConstraint("amount_paise >= 0", name="ck_transactions_amount_non_negative"),
     CheckConstraint("fee_paise >= 0", name="ck_transactions_fee_non_negative"),
     CheckConstraint("currency = 'INR'", name="ck_transactions_currency_supported"),
@@ -180,6 +220,14 @@ transactions = Table(
         name="ck_transactions_capture_fields_agree",
     ),
     Index("ix_transactions_merchant_captured", "merchant_id", "captured_at"),
+    Index("ix_transactions_merchant_method_attempted", "merchant_id", "method", "attempted_at"),
+    Index(
+        "ix_transactions_declines",
+        "merchant_id",
+        "issuer",
+        "attempted_at",
+        postgresql_where=text("decline_type IS NOT NULL"),
+    ),
     Index(
         "ix_transactions_merchant_utr",
         "merchant_id",

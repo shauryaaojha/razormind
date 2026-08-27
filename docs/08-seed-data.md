@@ -1,149 +1,187 @@
-# 08 — Seed Data and the Golden Story
+# 08 — Seed Data, Calibration, and the Ground Truth
 
 The synthetic dataset is not filler. It is the specification's test fixture: every headline number
 in the product, the demo and the docs is asserted against it.
 
-## Generator rules
+## What is claimed, and what is not
 
-Fixes [C-15d/C-15e/C-15i](00-corrections.md#c-15-m--other-fixes-applied-without-further-discussion).
+> **Transaction-level records are synthetic and seeded.** No real customer, merchant, or bank
+> record is represented. Aggregate distributions and operational characteristics are **calibrated
+> against public NPCI/RBI statistics**. Failure rates are not Razorpay's; the incident is invented.
+
+Every calibration parameter carries a provenance tag — `CITED`, `DERIVED` or `ASSUMED` — and
+[`data/calibration/sources.md`](../data/calibration/sources.md) redeems each one with a URL and a
+retrieval date. `ASSUMED` is not an apology: a single merchant's payment mix is not a published
+statistic and never will be. What matters is that a design choice is never mistaken for an
+observation ([D-23](decisions.md#d-23--the-dataset-is-market-calibrated-not-arbitrary)).
+
+The API serves this at `GET /api/v1/provenance`, generated from the calibration layer rather than
+written by hand — a provenance statement maintained separately from the parameters it describes
+goes stale in a week.
+
+## The pipeline
+
+```text
+public NPCI / RBI statistics
+        |
+        v
+calibration parameters          data/calibration/   every one tagged
+        |
+        v
+scenario definition             data/scenarios/     the hidden world
+        |
+        v
+synthetic generator             data/seed/generate_seed_data.py
+        |
+        +--> ledger_side.csv
+        +--> bank_settlement.csv
+        +--> seed.sql
+        +--> golden/ground_truth.json
+        +--> golden/checksums.json
+```
+
+## Counts are designed. Money is derived.
+
+The scenario fixes the **capture counts** and the **planted anomaly counts**. Everything else —
+failures, ticket values, fees, success rates, decline rates, and the revenue decline itself —
+emerges from the calibration layer ([D-26](decisions.md#d-26--counts-are-designed-money-is-derived)).
+
+That is the line between choosing the shape of a story and choosing its answer, and it changes what
+the fixture assertions can be: they check identities and calibration bands, not hard-coded revenue.
 
 | Rule | Detail |
 | --- | --- |
 | RNG | `rng = random.Random(42)` — a local instance. Never `random.seed()`, which mutates global state and makes output depend on import order. |
-| Output | `data/seed/ledger_side.csv`, `data/seed/bank_settlement.csv`, `data/seed/seed.sql` |
+| Output | `ledger_side.csv`, `bank_settlement.csv`, `seed.sql`, `golden/ground_truth.json`, `golden/checksums.json` |
 | Money | Integer paise throughout, in the CSV too |
 | Timestamps | ISO-8601 with explicit `+05:30` offset |
-| Reproducibility | `make seed` then `make verify-seed` recomputes SHA-256 of both CSVs and compares against `data/seed/golden/checksums.json`. A mismatch fails CI. |
-| Python | Pinned to 3.13 in both `pyproject.toml` and the API image; `rng.shuffle`/`rng.sample` semantics are stable within a minor release, so the image is part of the fixture ([D-17](decisions.md#d-17--python-is-pinned-to-313-not-312)) |
-| Totals | Exact **by construction**. Amounts are apportioned out of a fixed total by largest remainder, so the sum is the target to the paise whatever the random weights do. |
-| Amounts | Every amount is a whole number of rupees. That is what makes the 1.00% fee exact: one percent of a whole-rupee amount is an integer, so per-record fees sum to one percent of the total with no drift. |
-| Ids | Drawn from a seeded shuffle, not assigned chronologically — which is both realistic and what stops the matcher's lexicographic tie-break from accidentally agreeing with time order. It is also why `TXN_183` can sit in the August window. |
+| Totals | Exact **by construction** — largest-remainder apportionment, so the sum is the target to the paise whatever the random weights do |
+| Amounts | Whole rupees, with each method's realised mean ticket equal to its calibrated one |
+| Ids | Drawn from a seeded shuffle, not assigned chronologically — realistic, and it stops the matcher's lexicographic tie-break from accidentally agreeing with time order. It is why `TXN_183` sits in the August window. |
+| Python | Pinned to 3.13 in both `pyproject.toml` and the API image ([D-17](decisions.md#d-17--python-is-pinned-to-313-not-312)) |
+| Reproducibility | `make verify-seed` recomputes SHA-256 of every artifact **and rebuilds the dataset in-process** to compare |
 
 The file was named `razorpay_side.csv` in the vision doc, which implies a live integration the
 project explicitly disclaims (vision §43). It is `ledger_side.csv`.
 
-## Shape
+## Payment mix — volume share is not value share
 
-```text
-Span             90 days, 2026-05-26 -> 2026-08-24 (IST, half-open)
-Merchant         M123, single merchant, INR only
-Attempts         1,620 payment attempts
-Successful       1,502
-Methods          UPI 46.66% of attempted value, CARD, NETBANKING, WALLET
-Analysis window  2026-08-01 -> 2026-08-24   (current, 23 days)
-Comparison       2026-07-01 -> 2026-07-24   (prior,   23 days)
-Reconciliation   ledger 2026-08-01 -> 2026-08-24  : 342 records
-                 bank   2026-08-05 -> 2026-09-01  : 341 records
-```
+The single most important calibration fact. UPI is dominant by **count** and much less dominant by
+**value**, because its ticket is small: NPCI's figures put P2M at ~63% of UPI volume but ~29% of
+its value, with ~86% of P2M volume under ₹500.
 
-The two reconciliation windows are not the same dates because the two sides do not carry the same
-date. `bank_period()` shifts the capture window forward by the T+2 SLA and widens the far end by
-the timing-lag ceiling — see [D-18](decisions.md#d-18--a-reconciliation-run-scopes-its-two-sides-on-different-dates).
-The generator leaves a two-day quiet band before each analysis window so the capture cohort and
-the settlement cohort are exactly the same payments
-([D-19](decisions.md#d-19--the-fixture-leaves-a-two-day-quiet-band-before-each-analysis-window)).
+A generator that assigns one "share" per method and uses it for both count and value is modelling a
+world that cannot exist. So each method declares a **volume share** and a **mean ticket**, and the
+value share is *derived*:
 
-The vision doc said "300–500 transactions" while also showing a 342-record reconciliation for a
-23-day window; those cannot both hold. The dataset is ~1,600 attempts over 90 days, of which the
-current window contributes 342 settlement-eligible ledger records.
-
-## The golden story
-
-A deliberate, coherent operational narrative — not random noise. This is what makes the demo a
-diagnosis rather than a statistics readout.
-
-```text
-UPI issuer degradation from 2026-08-06
-        |
-        v
-UPI success rate 96.8% -> 82.9%   (-13.9 pp)
-        |
-        v
-blended success rate 96.81% -> 90.32%   (-6.49 pp)
-        |
-        +-- compounded by an 11.03% drop in attempted volume
-        |
-        v
-gross successful value falls Rs 8,76,800
-        |
-        +-- refunds up Rs 24,000
-        +-- chargebacks up Rs 7,500
-        +-- fees down Rs 8,768 (mechanical, follows gross)
-        |
-        v
-net revenue -18.00%
-```
-
-Alongside, and deliberately *not* part of the revenue story:
-
-```text
-settlement timing lag      7 exceptions
-duplicate settlement       1 exception
-fee discrepancy            2 exceptions
-missing counterpart        3 exceptions, Rs 18,400 unresolved
-amount mismatch            2 exceptions
-```
-
-## Golden figures
-
-Every number below is asserted by `tests/test_golden_story.py`. Fixes
-[C-02](00-corrections.md#c-02-b--the-flagship-demos-revenue-bridge-does-not-close) and
-[C-03](00-corrections.md#c-03-m--the-upi-figure-was-disconnected-from-the-headline).
-
-### Revenue bridge
-
-| | Prior (Jul 1–23) | Current (Aug 1–23) | Change |
+| Method | Volume share | Value share (derived) | Mean ticket |
 | --- | ---: | ---: | ---: |
-| Attempted value | ₹53,30,000 | ₹47,42,000 | −11.03% |
-| Success rate (blended) | 96.81% | 90.32% | −6.49 pp |
-| Gross successful | ₹51,60,000 | ₹42,83,200 | −₹8,76,800 |
-| Refunds | ₹1,00,000 | ₹1,24,000 | +₹24,000 |
-| Fees @ 1.00% | ₹51,600 | ₹42,832 | −₹8,768 |
-| Chargebacks | ₹11,000 | ₹18,500 | +₹7,500 |
-| **Net revenue** | **₹49,97,400** | **₹40,97,868** | **−₹8,99,532** |
-| | | | **−18.00%** |
+| `UPI` | 0.720222 | 0.387535 | Rs 640 |
+| `CARD` | 0.160665 | 0.378821 | Rs 2,850 |
+| `NETBANKING` | 0.058172 | 0.206764 | Rs 4,200 |
+| `WALLET` | 0.060942 | 0.026879 | Rs 520 |
 
-Fees are exactly 1.00% of gross in both periods, which is what makes `FEE_DISCREPANCY` detectable
-as a deviation rather than a modelling artifact.
+`verify-seed` asserts UPI's value share stays *below* its volume share. If that ever inverts, the
+low-ticket property has been lost and the dataset no longer resembles Indian payments.
 
-### Attribution
+## Fees — per instrument, and the flat 1% is gone
 
-```text
-volume_effect        = rate_prior * (attempted_curr - attempted_prior)
-success_rate_effect  = attempted_curr * (rate_curr - rate_prior)
-```
+`method` is the rail; **`instrument` is the funding source, and the funding source decides the
+fee** ([D-24](decisions.md#d-24--fees-are-per-instrument-and-the-flat-1-is-gone)).
 
-| Driver | Contribution | Share |
+| Instrument | Rule | Provenance |
+| --- | --- | --- |
+| `UPI_BANK_ACCOUNT` | **0%** — zero MDR by mandate since January 2020 | `CITED` |
+| `RUPAY_DEBIT` | **0%** — zero MDR by mandate | `CITED` |
+| `UPI_PPI_WALLET` | 1.10% above ₹2,000 | `CITED` |
+| `UPI_RUPAY_CREDIT` | 1.50% above ₹2,000 (MDR applies from 01 Jun 2026) | `CITED` |
+| `OTHER_DEBIT` | 0.90% | `ASSUMED` |
+| `CREDIT_CARD` | 1.90% | `ASSUMED` |
+| `NETBANKING` | ₹12 flat per transaction | `ASSUMED` |
+| `WALLET` | 1.65% | `ASSUMED` |
+
+The blended effective rate that falls out of this mix is **0.006420** —
+nothing like 1%, because the volume-dominant rail is free. `verify-seed` asserts it stays below 1%.
+
+This is what makes a `FEE_DISCREPANCY` a finding rather than noise: the engine reports
+`matches_rule_for`, naming the instrument whose rule would have produced the fee the bank actually
+charged. "This zero-MDR UPI payment was billed under the credit-card agreement" is actionable.
+
+## Declines — technical versus business
+
+NPCI separates **technical declines** (a bank or NPCI back end failing — timeouts, unavailability,
+overload) from **business declines** (the customer's side — wrong PIN, insufficient funds, limit
+exceeded), and publishes both per bank, monthly. Ecosystem TD sits at 0.7–0.8% against a target
+under 1%; the BD target is under 5% (circular OC-149).
+
+An investigation that cannot separate them can only report that a success rate moved, which is a
+symptom rather than a finding. So every failed attempt carries `decline_type` and `decline_reason`,
+and a `CHECK` constraint makes a failure without a type impossible.
+
+| | Prior | Current |
 | --- | ---: | ---: |
-| Attempt-volume decline | −₹5,69,246 | 63.3% |
-| Payment success-rate decline | −₹3,07,554 | 34.2% |
-| Refund increase | −₹24,000 | 2.7% |
-| Chargeback increase | −₹7,500 | 0.8% |
-| Fee decrease (offset) | +₹8,768 | −1.0% |
-| Rounding residual | ₹0 | 0.0% |
-| **Total** | **−₹8,99,532** | **100.0%** |
+| Attempts | 429 | 361 |
+| Captures | 411 | 341 |
+| Success rate | 0.958042 | 0.944598 |
+| **Technical declines** | **0.006993** | **0.022161** |
+| Business declines | 0.034965 | 0.033241 |
 
-The residual is zero for this fixture but the field is mandatory
-([06-trust-layer.md](06-trust-layer.md#bridge-identity)) — the rate/volume split is fractional in
-general and the identity must close by construction, not by luck.
+Technical declines roughly triple. Business declines stay flat — that asymmetry is the whole basis
+for attributing the movement to the platform rather than to customers, and `verify-seed` fails if
+business declines drift by more than a point.
 
-### Method mix consistency
-
-The blended rate is not asserted independently; it must *fall out* of the method mix:
+## The incident
 
 ```text
-UPI share of attempted value        46.66%
-UPI success        96.8% -> 82.9%
-non-UPI success    96.82% (flat)
+upi_issuer_degradation
+    2026-08-09 -> 2026-08-19
+    method    UPI
+    issuers   BANK_A, BANK_B, BANK_C
 
-blended prior   = 0.4666 * 96.8  + 0.5334 * 96.82 = 96.81%
-blended current = 0.4666 * 82.9  + 0.5334 * 96.82 = 90.32%
+technical declines, affected issuers    0.095890
+technical declines, everyone else       0.000000
 ```
 
-This is the fix for C-03: in the original spec the UPI figure and the headline figure were
-unrelated numbers that happened to sit in the same document.
+A spike everywhere is weather. A spike at three named issuers, on one rail, inside a dated window,
+is a finding.
 
-### Reconciliation
+## The revenue bridge
+
+| | Prior (2026-07-01 → 2026-07-24) | Current (2026-08-01 → 2026-08-24) |
+| --- | ---: | ---: |
+| Attempted value | Rs 5,12,930 | Rs 4,31,340 |
+| Gross successful | Rs 4,86,920 | Rs 4,06,260 |
+| Refunds | Rs 9,446 | Rs 11,782 |
+| Fees | Rs 3,026 | Rs 2,608 |
+| Chargebacks | Rs 1,023 | Rs 1,747 |
+| **Net revenue** | **Rs 4,73,424** | **Rs 3,90,122** |
+
+Decline **-Rs 83,301 = -0.175956**, fully attributed with
+a **zero** rounding residual:
+
+| Driver | Contribution |
+| --- | ---: |
+| Attempt-volume decline | -Rs 77,452 |
+| Payment success rate | -Rs 3,207 |
+| Refund increase | -Rs 2,336 |
+| Chargeback increase | -Rs 724 |
+| Fee decrease (offset) | Rs 418 |
+| Rounding residual | Rs 0 |
+| **Total** | **-Rs 83,301** |
+
+**The primary driver is attempt volume, not the incident.** The incident is real and localised, and
+it is *not* what moved revenue. `verify-seed` asserts the declared `expected_diagnosis` really is
+the largest term in the generated attribution
+([D-27](decisions.md#d-27--the-ground-truth-is-checked-against-its-own-dataset)), because a ground
+truth that disagrees with its own dataset is worse than none.
+
+That makes the scenario a deliberate trap: the incident is the salient event, and a model reasoning
+from narrative rather than arithmetic will name it as the cause.
+
+## Reconciliation
+
+Scoped to the analysis window. Ledger by IST capture date; bank by `bank_period()`
+([D-18](decisions.md#d-18--a-reconciliation-run-scopes-its-two-sides-on-different-dates)).
 
 | | |
 | --- | ---: |
@@ -154,60 +192,42 @@ unrelated numbers that happened to sit in the same document.
 | — with exception | 11 |
 | Unmatched ledger | 4 |
 | Unmatched bank | 3 |
-| **Clean match rate** | **95.61%** |
-| **Exceptions** | **15** |
+| **Clean match rate** | **0.956140** |
+| **Exceptions** (ledger-side) | **15** |
 
-| Category | Count |
-| --- | ---: |
-| `TIMING_LAG` | 7 |
-| `NO_COUNTERPART` | 3 |
-| `AMOUNT_MISMATCH` | 2 |
-| `FEE_DISCREPANCY` | 2 |
-| `POSSIBLE_DUPLICATE` | 1 |
+| Category | Count | How it is planted |
+| --- | ---: | --- |
+| `TIMING_LAG` | 7 | Settlement `value_date` pushed 1–3 business days past the SLA |
+| `NO_COUNTERPART` | 3 | Ledger rows with no bank row (`TXN_183`, `TXN_247`, `TXN_402`) |
+| `AMOUNT_MISMATCH` | 2 | Bank amount differs by ₹1 and ₹250 |
+| `FEE_DISCREPANCY` | 2 | The bank bills under the **wrong instrument's rule** — a zero-MDR UPI payment charged at the credit-card rate |
+| `POSSIBLE_DUPLICATE` | 1 | A second ledger row duplicating an existing UTR and amount |
 
-Unresolved value: `TXN_183` ₹8,400 + `TXN_247` ₹6,200 + `TXN_402` ₹3,800 = **₹18,400**
-(0.45% of net revenue, reported as a confidence band).
+Unresolved `NO_COUNTERPART` value: **Rs 1,840** across
+`TXN_183`, `TXN_247`, `TXN_402` — reported as a confidence band on the figures, never netted into
+any of them (I7).
 
-`SETTLEMENT_91` exists in the bank file as a near-miss for `TXN_183`: same amount, no reference,
-4 days outside the window. It matches rule 5 at confidence 0.72 and is therefore recorded as a
-**rejected candidate**, not a match.
-
-## Planting the exceptions
-
-Each is injected deterministically at a fixed index so the counts never drift:
-
-| Exception | How it is planted |
-| --- | --- |
-| `TIMING_LAG` × 7 | Settlement `value_date` pushed 1–3 business days past `settlement_due_date` |
-| `AMOUNT_MISMATCH` × 2 | Bank amount differs by ₹1 and ₹250 |
-| `FEE_DISCREPANCY` × 2 | Bank fee set to 1.35% and 0.62% instead of 1.00% |
-| `NO_COUNTERPART` × 3 | Ledger rows written with no bank row (`TXN_183`, `TXN_247`, `TXN_402`) |
-| `POSSIBLE_DUPLICATE` × 1 | A second ledger row duplicating an existing UTR and amount |
-| `unmatched_bank` × 3 | Bank rows with no ledger row, one of which is `SETTLEMENT_91` |
+`SETTLEMENT_91` exists in the bank file as a near miss for `TXN_183`: same amount, no reference,
+four business days outside the window. It reaches rule 5 at confidence 0.72 and is therefore
+recorded as a **rejected candidate**, not a match.
 
 ## Verification of the fixture itself
 
 `python scripts/task.py verify-seed` asserts, before any application code runs:
 
 ```text
-1. Every artifact matches golden/checksums.json, and regenerates identically
-2. The bridge identity closes to the paise, in both windows
-3. Attribution sums to the net change, with a zero rounding residual
-4. The blended success rate equals the method-mix computation
-5. Reconciliation invariants I1-I4 hold, and the identifiers are unique
-6. Exception counts equal the golden breakdown
-7. Unresolved value equals 1840000 paise across the three named records
+ 1. Every artifact matches checksums.json, and regenerates identically
+ 2. The bridge identity closes to the paise, in both windows
+ 3. Attribution sums to the net change, with a zero rounding residual
+ 4. Volume share and value share are different numbers, both calibrated
+ 5. Technical and business declines exist and behave differently
+ 6. Fees follow the instrument, and zero-MDR really means zero
+ 7. Reconciliation invariants I1-I4 hold, and identifiers are unique
+ 8. Exception counts equal the golden breakdown
+ 9. Unresolved value is exactly 184000 paise
+10. The declared diagnosis is the one the dataset actually supports
 ```
-
-Four artifacts are checksummed, not two: both CSVs, `seed.sql`, and `golden/expectations.json` —
-the machine-readable golden numbers every later phase asserts against. Check 1 also rebuilds the
-dataset in-process and compares, because a generator that is only deterministic when nothing else
-has consumed the RNG is not deterministic.
 
 I5 and I6 are database unique constraints and belong to Phase 2, when match rows exist. What
 Phase 1 proves is that the fixture handed to the matcher is arithmetically capable of satisfying
-them: no repeated transaction id, no repeated settlement id, and exactly one repeated UTR — the
-planted duplicate, which is the whole `POSSIBLE_DUPLICATE` story.
-
-If the fixture is wrong, nothing downstream can be trusted — so these run first, in Phase 1,
-before the reconciliation engine exists.
+them.

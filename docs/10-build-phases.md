@@ -46,7 +46,7 @@ correct and provable before anything non-deterministic touches it.
 - Migrations for every table in [02-data-model.md](02-data-model.md#tables), including RLS policies
 - `data/seed/generate_seed_data.py` per [08-seed-data.md](08-seed-data.md)
 - `data/seed/golden/checksums.json`
-- `tests/test_golden_story.py` — the seven fixture assertions
+- `tests/test_golden_story.py` — the fixture assertions
 
 **Exit criteria**
 - `make seed && make verify-seed` green, twice in a row, on two machines
@@ -75,7 +75,7 @@ correct and provable before anything non-deterministic touches it.
 **Exit criteria**
 - Golden reconciliation reproduced exactly: 342 / 341 / 338 / 327 / 15 / 95.61%
 - Exception breakdown exactly 7 / 3 / 2 / 2 / 1
-- Unresolved value exactly `1840000` paise across `TXN_183`, `TXN_247`, `TXN_402`
+- Unresolved value exactly `184000` paise across `TXN_183`, `TXN_247`, `TXN_402`
 - `SETTLEMENT_91` appears as a rejected candidate at confidence 0.72, not a match
 - **Shuffle test**: reconciling with input rows in 20 different random orders produces byte-identical output
 - Attempting to insert a duplicate match violates the unique constraint
@@ -179,7 +179,8 @@ correct and provable before anything non-deterministic touches it.
 
 **Exit criteria**
 - A stub LLM that invents `₹5,00,000` is caught, regenerated, then falls back
-- A stub that restates `−18.00%` as `−18.2%` fails check 3 (byte-match)
+- A stub that restates the verified decline ratio to one decimal place fails check 3
+  (byte-match)
 - With the LLM provider disabled entirely, the run still `COMPLETED`s with the full verified
   bridge via template
 - `response_source` is persisted on every execution

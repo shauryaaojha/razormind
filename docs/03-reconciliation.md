@@ -141,12 +141,27 @@ works at all.
 Fixes [C-15g](00-corrections.md#c-15-m--other-fixes-applied-without-further-discussion).
 
 ```text
-expected_fee_paise = apply_rate(amount_paise, Decimal("0.0100"))     # half-up
+expected_fee_paise = FEE_SCHEDULE[transaction.instrument].fee_paise(amount_paise)
 tolerance_paise    = max(100, apply_rate(expected_fee_paise, Decimal("0.005")))
 FEE_DISCREPANCY  <=>  abs(actual_fee_paise - expected_fee_paise) > tolerance_paise
 ```
 
-The ₹1.00 floor exists so that half-up rounding on small transactions never trips a false
+The expected fee comes from the **instrument**, not a flat percentage
+([D-24](decisions.md#d-24--fees-are-per-instrument-and-the-flat-1-is-gone)). Bank-account UPI and
+RuPay debit are zero-MDR by mandate, so their expected fee is genuinely zero; a card carries its
+negotiated rate; netbanking is billed flat per transaction. A flat 1% could not represent a
+mandated zero rate at all, which made a fee discrepancy arithmetic noise — there was no commercial
+rule behind the expected number for the actual to violate.
+
+The exception therefore carries `matches_rule_for`: the instrument whose rule *would* have produced
+the fee the bank actually charged, when exactly one entry in the schedule reproduces it. Ambiguity
+returns nothing rather than the first plausible match. "This zero-MDR UPI payment was billed under
+the credit-card agreement" is a finding; "the fee was ₹200 out" is not.
+
+An unknown instrument is **refused**, not defaulted — a fallback rate would produce an expected fee
+no commercial agreement supports, and every discrepancy measured against it would be fiction.
+
+The ₹1.00 tolerance floor exists so that half-up rounding on small transactions never trips a false
 discrepancy.
 
 ### Timing lag
@@ -196,5 +211,5 @@ clean_match_rate_ratio  0.956140    NO_COUNTERPART      3
                                     exceptions         15
 ```
 
-Unresolved `NO_COUNTERPART` value: `TXN_183` ₹8,400 + `TXN_247` ₹6,200 + `TXN_402` ₹3,800
-= **₹18,400**.
+Unresolved `NO_COUNTERPART` value: `TXN_183` ₹840 + `TXN_247` ₹620 + `TXN_402` ₹380
+= **₹1,840** (184,000 paise).

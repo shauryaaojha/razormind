@@ -1,11 +1,23 @@
-"""The seven fixture assertions, run before any application code.
+"""The fixture assertions, run before any application code.
 
-docs/08-seed-data.md lists these and Phase 1 makes them a gate. They run first
-because if the fixture is wrong then nothing downstream can be trusted -- and,
-worse, every downstream test would be wrong *and green*.
+These run first because if the fixture is wrong then nothing downstream can be
+trusted -- and, worse, every downstream test would be wrong *and green*.
 
-Each check returns a line of evidence, not just a boolean, so a failure says
-what the number actually was.
+**What changed when the dataset became market-calibrated.** The old checks
+compared against hard-coded revenue figures. They cannot any more, and should
+not: the money now *emerges* from the calibration layer rather than being
+targeted, so asserting `net_revenue == 40_97_868` would only assert that
+somebody wrote the same number twice. What these checks assert instead is the
+set of properties that must hold however the numbers land:
+
+* identities that must close (the bridge, the attribution, I1-I4)
+* counts the scenario deliberately designed (the reconciliation figures)
+* calibration reproducing itself (realised decline rates inside the published
+  band; realised method shares matching the declared mix)
+* the ground truth agreeing with its own dataset
+
+A fixture whose ground truth disagrees with the data it ships is worse than no
+ground truth at all, so that last one is a check and not a comment.
 
 Run: ``python scripts/task.py verify-seed``
 """
@@ -20,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "apps" / "api" / "src"))
 
+from data.calibration.parameters import MERCHANT_MIX  # noqa: E402
 from data.seed.generate_seed_data import (  # noqa: E402
     ARTIFACTS,
     GOLDEN,
@@ -29,9 +42,11 @@ from data.seed.generate_seed_data import (  # noqa: E402
     build,
 )
 
+from runtime.fees import FEE_SCHEDULE, Instrument  # noqa: E402
 from runtime.money import ratio  # noqa: E402
 
-#: docs/03-reconciliation.md, "Golden expectation".
+#: docs/03-reconciliation.md, "Golden expectation". These are counts the
+#: scenario designs, so they are legitimately fixed.
 GOLDEN_RECONCILIATION = {
     "ledger_count": 342,
     "bank_count": 341,
@@ -51,55 +66,55 @@ GOLDEN_EXCEPTIONS = {
     "POSSIBLE_DUPLICATE": 1,
 }
 
-#: docs/08-seed-data.md, "Golden figures". Paise.
-GOLDEN_WINDOWS = {
-    "prior": {
-        "attempted_value_paise": 533_000_000,
-        "gross_payments_paise": 516_000_000,
-        "refunds_paise": 10_000_000,
-        "fees_paise": 5_160_000,
-        "chargebacks_paise": 1_100_000,
-        "net_revenue_paise": 499_740_000,
-    },
-    "current": {
-        "attempted_value_paise": 474_200_000,
-        "gross_payments_paise": 428_320_000,
-        "refunds_paise": 12_400_000,
-        "fees_paise": 4_283_200,
-        "chargebacks_paise": 1_850_000,
-        "net_revenue_paise": 409_786_800,
-    },
-}
+UNRESOLVED_PAISE = 184_000
 
-GOLDEN_RATES = {
-    "prior": {"blended": "0.968105", "UPI": "0.968000", "share_UPI": "0.466600"},
-    "current": {"blended": "0.903248", "UPI": "0.829001", "share_UPI": "0.466600"},
-}
+#: NPCI publishes ecosystem technical declines at 0.7-0.8% with a target under
+#: 1%, and a business-decline target under 5% (OC-149). A baseline outside
+#: these is a calibration failure, not a rounding difference.
+TD_BAND = (Decimal("0.004"), Decimal("0.012"))
+BD_BAND = (Decimal("0.020"), Decimal("0.050"))
 
-UNRESOLVED_PAISE = 1_840_000
-NET_CHANGE_PAISE = -89_953_200
-NET_CHANGE_RATIO = "-0.180000"
+#: How far a realised share may drift from its declared one. Apportionment is
+#: exact but the population is finite, so a point or so of slack is honest.
+SHARE_TOLERANCE = Decimal("0.02")
+
+#: Instruments whose MDR is zero by mandate, not by negotiation.
+ZERO_MDR = (Instrument.UPI_BANK_ACCOUNT, Instrument.RUPAY_DEBIT)
 
 
 class FixtureError(AssertionError):
     """The fixture is not the one the documentation describes."""
 
 
-def _expectations() -> dict[str, object]:
-    path = GOLDEN / "expectations.json"
+def _truth() -> dict[str, object]:
+    path = GOLDEN / "ground_truth.json"
     if not path.exists():
-        raise FixtureError("golden/expectations.json is missing -- run `task.py seed` first")
+        raise FixtureError("golden/ground_truth.json is missing -- run `task.py seed` first")
     loaded: dict[str, object] = json.loads(path.read_text(encoding="utf-8"))
     return loaded
 
 
+def _section(name: str) -> dict[str, object]:
+    section = _truth()[name]
+    assert isinstance(section, dict)
+    return section
+
+
+def _int(section: dict[str, object], key: str) -> int:
+    return int(str(section[key]))
+
+
+def _dec(section: dict[str, object], key: str) -> Decimal:
+    return Decimal(str(section[key]))
+
+
 # --------------------------------------------------------------------------
-# the seven checks
+# checks
 # --------------------------------------------------------------------------
 
 
 def check_checksums() -> str:
-    """1. Every artifact matches golden/checksums.json, and regenerates identically."""
+    """1. Every artifact matches checksums.json, and regenerates identically."""
     manifest_path = GOLDEN / "checksums.json"
     if not manifest_path.exists():
         raise FixtureError("golden/checksums.json is missing -- run `task.py seed` first")
@@ -115,128 +130,197 @@ def check_checksums() -> str:
                 f"{name} checksum drifted\n  expected {manifest.get(name)}\n  actual   {actual}"
             )
 
-    # Determinism is the claim, so rebuild in-process and compare the
-    # expectations rather than trusting that the file on disk came from this
-    # code. A generator that is only deterministic when nothing else has run
-    # is not deterministic.
-    rebuilt = build().expectations
-    if rebuilt != _expectations():
-        raise FixtureError("regenerating the dataset produced different expectations")
+    # Determinism is the claim, so rebuild in-process rather than trusting that
+    # the file on disk came from this code. A generator that is only
+    # deterministic when nothing else has consumed the RNG is not deterministic.
+    if build().ground_truth != _truth():
+        raise FixtureError("regenerating the dataset produced a different ground truth")
     return f"{len(ARTIFACTS)} artifacts match, and regeneration is identical"
 
 
 def check_bridge_closes() -> str:
     """2. gross - refunds - fees - chargebacks == net, in both windows."""
-    expectations = _expectations()
     lines = []
-    for window, golden in GOLDEN_WINDOWS.items():
-        actual = expectations[window]
-        assert isinstance(actual, dict)
-        for field, expected in golden.items():
-            if actual[field] != expected:
-                raise FixtureError(f"{window}.{field} is {actual[field]}, expected {expected}")
+    for window in ("prior", "current"):
+        actual = _section(window)
         derived = (
-            int(actual["gross_payments_paise"])
-            - int(actual["refunds_paise"])
-            - int(actual["fees_paise"])
-            - int(actual["chargebacks_paise"])
+            _int(actual, "gross_payments_paise")
+            - _int(actual, "refunds_paise")
+            - _int(actual, "fees_paise")
+            - _int(actual, "chargebacks_paise")
         )
-        if derived != int(actual["net_revenue_paise"]):
+        if derived != _int(actual, "net_revenue_paise"):
             raise FixtureError(
                 f"{window} bridge does not close: {derived} != {actual['net_revenue_paise']}"
             )
+        if _int(actual, "gross_payments_paise") > _int(actual, "attempted_value_paise"):
+            raise FixtureError(f"{window} gross exceeds attempted value")
         lines.append(f"{window} net {actual['net_revenue_paise']}")
     return "; ".join(lines)
 
 
 def check_attribution() -> str:
     """3. The causes sum to the change, with a zero rounding residual."""
-    attribution = _expectations()["attribution"]
-    assert isinstance(attribution, dict)
+    attribution = _section("attribution")
     terms = attribution["terms"]
     assert isinstance(terms, dict)
 
-    total = sum(int(value) for value in terms.values()) + int(
-        attribution["rounding_residual_paise"]
+    net_change = _int(attribution, "net_change_paise")
+    total = sum(int(str(value)) for value in terms.values()) + _int(
+        attribution, "rounding_residual_paise"
     )
-    if total != NET_CHANGE_PAISE:
-        raise FixtureError(f"attribution sums to {total}, but the net change is {NET_CHANGE_PAISE}")
-    # The residual field is mandatory but must be zero for this fixture: the
-    # rate/volume split is defined so the two terms are exact complements.
-    residual = int(attribution["rounding_residual_paise"])
+    if total != net_change:
+        raise FixtureError(f"attribution sums to {total}, but the net change is {net_change}")
+    residual = _int(attribution, "rounding_residual_paise")
     if residual != 0:
         raise FixtureError(f"rounding residual is {residual}, expected 0")
-    if attribution["net_change_ratio"] != NET_CHANGE_RATIO:
-        raise FixtureError(
-            f"net change ratio is {attribution['net_change_ratio']}, expected {NET_CHANGE_RATIO}"
-        )
-    return f"{len(terms)} terms sum to {NET_CHANGE_PAISE} paise, residual 0, {NET_CHANGE_RATIO}"
+    if net_change >= 0:
+        raise FixtureError(f"the scenario is a revenue decline, but net change is {net_change}")
+    return (
+        f"{len(terms)} terms sum to {net_change} paise, residual 0, "
+        f"{attribution['net_change_ratio']}"
+    )
 
 
 def check_method_mix() -> str:
-    """4. The blended success rate falls out of the method mix.
+    """4. Volume share and value share are different numbers, both calibrated.
 
-    Not asserted independently -- recomputed from each method's share and rate,
-    which is the whole point of C-03. In the original spec the UPI figure and
-    the headline figure were unrelated numbers that happened to share a page.
+    The single most important calibration fact: UPI is dominant by count and
+    much less dominant by value, because its ticket is small. A generator that
+    used one share for both would be modelling a world that cannot exist, and
+    this check is what stops that regressing.
     """
-    expectations = _expectations()
+    declared = {profile.method: profile for profile in MERCHANT_MIX}
     lines = []
-    for window, golden in GOLDEN_RATES.items():
-        actual = expectations[window]
-        assert isinstance(actual, dict)
-        by_method = actual["by_method"]
+    for window in ("prior", "current"):
+        by_method = _section(window)["by_method"]
         assert isinstance(by_method, dict)
 
-        if actual["success_rate_ratio"] != golden["blended"]:
-            raise FixtureError(
-                f"{window} blended rate is {actual['success_rate_ratio']}, "
-                f"expected {golden['blended']}"
-            )
-        if by_method["UPI"]["success_rate_ratio"] != golden["UPI"]:
-            raise FixtureError(
-                f"{window} UPI rate is {by_method['UPI']['success_rate_ratio']}, "
-                f"expected {golden['UPI']}"
-            )
-        if by_method["UPI"]["attempted_share_ratio"] != golden["share_UPI"]:
-            raise FixtureError(
-                f"{window} UPI share is {by_method['UPI']['attempted_share_ratio']}, "
-                f"expected {golden['share_UPI']}"
-            )
+        missing = set(declared) - set(by_method)
+        if missing:
+            raise FixtureError(f"{window} is missing methods entirely: {sorted(missing)}")
 
-        # Rebuild the blend from the parts.
-        blended = sum(
-            Decimal(method["attempted_share_ratio"]) * Decimal(method["success_rate_ratio"])
-            for method in by_method.values()
+        for method, profile in declared.items():
+            stats = by_method[method]
+            volume = Decimal(str(stats["volume_share_ratio"]))
+            value = Decimal(str(stats["value_share_ratio"]))
+            if abs(volume - profile.volume_share) > SHARE_TOLERANCE:
+                raise FixtureError(
+                    f"{window} {method} volume share is {volume}, declared {profile.volume_share}"
+                )
+            ticket = int(str(stats["mean_ticket_paise"]))
+            drift = abs(ticket - profile.mean_ticket_paise)
+            if drift * 100 > profile.mean_ticket_paise * 5:
+                raise FixtureError(
+                    f"{window} {method} mean ticket is {ticket}, "
+                    f"declared {profile.mean_ticket_paise}"
+                )
+            if method == "UPI" and value >= volume:
+                raise FixtureError(
+                    f"{window} UPI value share {value} is not below its volume share "
+                    f"{volume} -- the low-ticket property has been lost"
+                )
+        upi = by_method["UPI"]
+        lines.append(
+            f"{window} UPI {upi['volume_share_ratio']} of volume, "
+            f"{upi['value_share_ratio']} of value"
         )
-        headline = Decimal(str(actual["success_rate_ratio"]))
-        if abs(blended - headline) > Decimal("0.000002"):
-            raise FixtureError(f"{window} mix recomputes to {blended}, headline says {headline}")
-        lines.append(f"{window} {headline}")
     return "; ".join(lines)
 
 
-def check_reconciliation_invariants() -> str:
-    """5. I1-I4 hold on the designed counts, and the identifiers are unique.
+def check_decline_taxonomy() -> str:
+    """5. Technical and business declines exist, and behave differently.
 
-    I5 and I6 are database unique constraints and belong to Phase 2, when
-    match rows exist. What Phase 1 can prove is that the fixture it hands to
-    the matcher is arithmetically capable of satisfying them.
+    A technical decline is a bank or NPCI back end failing; a business decline
+    is the customer's side. The incident must move the first and leave the
+    second alone -- that asymmetry is what lets an investigation name a cause
+    instead of a symptom.
     """
-    recon = _expectations()["reconciliation"]
-    assert isinstance(recon, dict)
+    prior = _section("prior")
+    current = _section("current")
 
+    baseline_td = _dec(prior, "technical_decline_ratio")
+    baseline_bd = _dec(prior, "business_decline_ratio")
+    if not TD_BAND[0] <= baseline_td <= TD_BAND[1]:
+        raise FixtureError(
+            f"baseline technical declines {baseline_td} sit outside the published band {TD_BAND}"
+        )
+    if not BD_BAND[0] <= baseline_bd <= BD_BAND[1]:
+        raise FixtureError(
+            f"baseline business declines {baseline_bd} sit outside the published band {BD_BAND}"
+        )
+
+    if _dec(current, "technical_decline_ratio") <= baseline_td:
+        raise FixtureError("technical declines did not rise in the incident window")
+    business_drift = abs(_dec(current, "business_decline_ratio") - baseline_bd)
+    if business_drift > Decimal("0.010"):
+        raise FixtureError(
+            f"business declines moved by {business_drift} -- they are supposed to stay flat, "
+            "which is the whole basis for separating a platform failure from a customer one"
+        )
+
+    incident = _section("incident")
+    affected = _dec(incident, "technical_decline_ratio_affected")
+    unaffected = _dec(incident, "technical_decline_ratio_unaffected")
+    if affected <= unaffected:
+        raise FixtureError(
+            f"the incident is not localised: affected issuers {affected}, others {unaffected}"
+        )
+    if affected < Decimal("0.03"):
+        raise FixtureError(f"incident technical declines {affected} are too small to detect")
+    return (
+        f"TD {baseline_td} -> {current['technical_decline_ratio']}, "
+        f"BD flat at {baseline_bd}; incident {affected} vs {unaffected}"
+    )
+
+
+def check_fee_schedule() -> str:
+    """6. Fees follow the instrument, and zero-MDR really means zero.
+
+    The flat 1% model could not represent a mandated zero rate at all, which is
+    why a fee discrepancy under it was arithmetic noise rather than a finding.
+    """
+    for instrument in ZERO_MDR:
+        rule = FEE_SCHEDULE[instrument]
+        for amount in (100_00, 10_000_00, 500_000_00):
+            if rule.fee_paise(amount) != 0:
+                raise FixtureError(f"{instrument} charged a fee on {amount} paise")
+
+    dataset = build()
+    for txn in dataset.transactions:
+        if txn.status != "CAPTURED":
+            if txn.fee_paise != 0:
+                raise FixtureError(f"{txn.id} was declined but carries a fee")
+            continue
+        expected = FEE_SCHEDULE[Instrument(txn.instrument)].fee_paise(txn.amount_paise)
+        if txn.fee_paise != expected:
+            raise FixtureError(
+                f"{txn.id} ({txn.instrument}) fee is {txn.fee_paise}, rule says {expected}"
+            )
+
+    effective = _dec(_section("current"), "effective_fee_rate_ratio")
+    if effective >= Decimal("0.0100"):
+        raise FixtureError(
+            f"the blended fee rate is {effective}, at or above the flat 1% this model replaced -- "
+            "a mix dominated by zero-MDR UPI cannot cost that much"
+        )
+    return f"per-instrument fees hold on {len(dataset.transactions)} records; blended {effective}"
+
+
+def check_reconciliation_invariants() -> str:
+    """7. I1-I4 hold on the designed counts, and the identifiers are unique."""
+    recon = _section("reconciliation")
     for field, expected in GOLDEN_RECONCILIATION.items():
         if recon[field] != expected:
             raise FixtureError(f"reconciliation.{field} is {recon[field]}, expected {expected}")
 
-    ledger = int(recon["ledger_count"])
-    bank = int(recon["bank_count"])
-    pairs = int(recon["matched_pairs"])
-    clean = int(recon["matched_clean"])
-    flagged = int(recon["matched_with_exception"])
-    unmatched_ledger = int(recon["unmatched_ledger"])
-    unmatched_bank = int(recon["unmatched_bank"])
+    ledger = _int(recon, "ledger_count")
+    bank = _int(recon, "bank_count")
+    pairs = _int(recon, "matched_pairs")
+    clean = _int(recon, "matched_clean")
+    flagged = _int(recon, "matched_with_exception")
+    unmatched_ledger = _int(recon, "unmatched_ledger")
+    unmatched_bank = _int(recon, "unmatched_bank")
 
     if clean + flagged + unmatched_ledger != ledger:
         raise FixtureError("I1 violated: ledger records are not fully accounted for")
@@ -249,76 +333,106 @@ def check_reconciliation_invariants() -> str:
         raise FixtureError(
             f"I4 violated: rate is {recon['clean_match_rate_ratio']}, expected {expected_rate}"
         )
-    if not Decimal("0") <= Decimal(str(recon["clean_match_rate_ratio"])) <= Decimal("1"):
-        raise FixtureError("I4 violated: clean match rate is outside [0, 1]")
 
     dataset = build()
-    txn_ids = [txn.id for txn in dataset.transactions]
-    stl_ids = [stl.id for stl in dataset.settlements]
-    if len(set(txn_ids)) != len(txn_ids):
-        raise FixtureError("duplicate transaction ids -- I5 could never hold")
-    if len(set(stl_ids)) != len(stl_ids):
-        raise FixtureError("duplicate settlement ids -- I6 could never hold")
+    for label, ids in (
+        ("I5", [t.id for t in dataset.transactions]),
+        ("I6", [s.id for s in dataset.settlements]),
+    ):
+        if len(set(ids)) != len(ids):
+            raise FixtureError(f"duplicate ids -- {label} could never hold")
 
     return f"I1-I4 hold on {ledger} ledger / {bank} bank records, rate {expected_rate}"
 
 
 def check_exception_breakdown() -> str:
-    """6. The exception counts equal the golden breakdown, and sum to the total."""
-    recon = _expectations()["reconciliation"]
-    assert isinstance(recon, dict)
+    """8. The exception counts equal the golden breakdown, and sum to the total."""
+    recon = _section("reconciliation")
     breakdown = recon["exceptions_by_category"]
     assert isinstance(breakdown, dict)
 
     if breakdown != GOLDEN_EXCEPTIONS:
         raise FixtureError(f"exception breakdown is {breakdown}, expected {GOLDEN_EXCEPTIONS}")
     total = sum(breakdown.values())
-    if total != int(recon["exception_count"]):
-        raise FixtureError(
-            f"breakdown sums to {total}, exception_count is {recon['exception_count']}"
-        )
+    if total != _int(recon, "exception_count"):
+        raise FixtureError(f"breakdown sums to {total}, count is {recon['exception_count']}")
     # The identity that makes the count meaningful: an exception is exactly a
     # ledger record that is not MATCHED_CLEAN.
-    if total != int(recon["ledger_count"]) - int(recon["matched_clean"]):
+    if total != _int(recon, "ledger_count") - _int(recon, "matched_clean"):
         raise FixtureError("exception count is not ledger_count - matched_clean")
     return " / ".join(f"{name} {count}" for name, count in sorted(breakdown.items()))
 
 
 def check_unresolved_value() -> str:
-    """7. The unresolved NO_COUNTERPART value is exactly 1,840,000 paise."""
-    recon = _expectations()["reconciliation"]
-    assert isinstance(recon, dict)
-    if int(recon["unresolved_paise"]) != UNRESOLVED_PAISE:
+    """9. The unresolved NO_COUNTERPART value is exactly 1,840,000 paise."""
+    recon = _section("reconciliation")
+    if _int(recon, "unresolved_paise") != UNRESOLVED_PAISE:
         raise FixtureError(
             f"unresolved value is {recon['unresolved_paise']}, expected {UNRESOLVED_PAISE}"
         )
-    expected_ids = [txn_id for txn_id, _, _ in NO_COUNTERPART]
+    expected_ids = [txn_id for txn_id, _ in NO_COUNTERPART]
     if recon["unresolved_transaction_ids"] != expected_ids:
         raise FixtureError(
             f"unresolved ids are {recon['unresolved_transaction_ids']}, expected {expected_ids}"
         )
 
-    dataset = build()
-    by_id = {txn.id: txn for txn in dataset.transactions}
+    by_id = {t.id: t for t in build().transactions}
     total = sum(by_id[txn_id].amount_paise for txn_id in expected_ids)
     if total != UNRESOLVED_PAISE:
         raise FixtureError(f"the named records sum to {total}, expected {UNRESOLVED_PAISE}")
-
-    settled = {stl.id for stl in dataset.settlements}
-    for txn_id in expected_ids:
-        if any(stl_id for stl_id in settled if stl_id == txn_id):  # pragma: no cover
-            raise FixtureError(f"{txn_id} should have no counterpart")
     return f"{UNRESOLVED_PAISE} paise across {', '.join(expected_ids)}"
+
+
+def check_diagnosis_matches_the_data() -> str:
+    """10. The declared answer is the one the dataset actually supports.
+
+    A ground truth that disagrees with its own dataset is worse than none: every
+    evaluation scored against it would be scoring the wrong thing, confidently.
+    So the declared primary driver is checked against the largest term in the
+    attribution rather than taken on trust.
+    """
+    incident = _section("incident")
+    expected = incident["expected_diagnosis"]
+    assert isinstance(expected, dict)
+
+    terms = _section("attribution")["terms"]
+    assert isinstance(terms, dict)
+    ranked = sorted(terms.items(), key=lambda item: int(str(item[1])))
+    largest_driver = ranked[0][0]
+
+    declared = str(expected["primary_driver"])
+    driver_terms = {
+        "attempt_volume_decline": "attempt_volume_paise",
+        "technical_payment_failures": "success_rate_paise",
+    }
+    if driver_terms.get(declared) != largest_driver:
+        raise FixtureError(
+            f"the declared primary driver is {declared!r}, but the largest term in the "
+            f"attribution is {largest_driver!r} -- the ground truth disagrees with its dataset"
+        )
+
+    if str(expected["affected_method"]) != str(incident["affected_method"]):
+        raise FixtureError("the declared affected method is not the one the incident used")
+    declared_issuers = expected["affected_issuers"]
+    actual_issuers = incident["affected_issuers"]
+    assert isinstance(declared_issuers, list)
+    assert isinstance(actual_issuers, list)
+    if sorted(str(i) for i in declared_issuers) != sorted(str(i) for i in actual_issuers):
+        raise FixtureError("the declared affected issuers are not the ones the incident used")
+    return f"primary driver {declared!r} is the largest attribution term"
 
 
 CHECKS: tuple[tuple[str, Callable[[], str]], ...] = (
     ("checksums and determinism", check_checksums),
     ("bridge closes", check_bridge_closes),
     ("attribution residual", check_attribution),
-    ("method mix", check_method_mix),
+    ("method mix, volume vs value", check_method_mix),
+    ("decline taxonomy", check_decline_taxonomy),
+    ("per-instrument fees", check_fee_schedule),
     ("reconciliation invariants", check_reconciliation_invariants),
     ("exception breakdown", check_exception_breakdown),
     ("unresolved value", check_unresolved_value),
+    ("diagnosis matches the data", check_diagnosis_matches_the_data),
 )
 
 
@@ -329,10 +443,10 @@ def main() -> int:
             detail = check()
         except FixtureError as error:
             failures += 1
-            print(f"{index}. {name}: FAIL", file=sys.stderr)
-            print(f"     {error}", file=sys.stderr)
+            print(f"{index:>2}. {name}: FAIL", file=sys.stderr)
+            print(f"      {error}", file=sys.stderr)
         else:
-            print(f"{index}. {name}: ok -- {detail}")
+            print(f"{index:>2}. {name}: ok -- {detail}")
     if failures:
         print(f"\nverify-seed FAILED ({failures} of {len(CHECKS)})", file=sys.stderr)
         return 1

@@ -74,24 +74,35 @@ a contract passes proves nothing — a contract with a typo in it also passes.
 
 ---
 
-## Golden numbers
+## The data
 
-Every headline figure is asserted against the seeded fixture. If any of these change, the fixture
-drifted and something downstream is wrong *and green*.
+**Synthetic records, calibrated aggregates, explicit provenance.** Transaction-level rows are
+invented and seeded; the payment mix, ticket sizes, decline rates and fee rules are calibrated
+against public NPCI/RBI statistics. Every parameter is tagged `CITED` / `DERIVED` / `ASSUMED` in
+`data/calibration/parameters.py`, redeemed in `data/calibration/sources.md`.
 
-| | Prior (Jul 1–23) | Current (Aug 1–23) |
+**Counts are designed; money is derived.** The scenario fixes capture counts and anomaly counts.
+Failures, values, fees, rates and the decline all emerge. So `verify-seed` asserts *identities and
+calibration bands*, never hard-coded revenue.
+
+| | Prior | Current |
 | --- | ---: | ---: |
-| Attempted value | ₹53,30,000 | ₹47,42,000 |
-| Blended success rate | 96.81% | 90.32% |
-| Gross successful | ₹51,60,000 | ₹42,83,200 |
-| Refunds | ₹1,00,000 | ₹1,24,000 |
-| Fees @ 1.00% | ₹51,600 | ₹42,832 |
-| Chargebacks | ₹11,000 | ₹18,500 |
-| **Net revenue** | **₹49,97,400** | **₹40,97,868** |
+| Attempts / captures | 429 / 411 | 361 / 341 |
+| Success rate | 0.958042 | 0.944598 |
+| Technical declines | 0.006993 | 0.022161 |
+| Business declines | 0.034965 | 0.033241 |
+| Net revenue | Rs 4,73,424 | Rs 3,90,122 |
 
-Decline **−₹8,99,532 = exactly −18.00%**, and the attribution closes with **zero residual**.
-Reconciliation: **342 / 341 / 338 / 327 / 15 / 95.61%**, ₹18,400 unresolved across 3 records.
+Decline **-Rs 83,301 = -0.175956**, residual **0**.
+Reconciliation **342 / 341 / 338 /
+327 / 15 / 0.956140**,
+Rs 1,840 unresolved.
 
+**The primary driver is attempt volume, not the incident.** The incident is real, dated and
+localised to BANK_A, BANK_B, BANK_C — and it is a deliberate trap for a model that
+reasons from narrative. `verify-seed` check 10 asserts the declared diagnosis matches the data.
+
+Regenerate with `task.py seed`; every number above comes from `golden/ground_truth.json`.
 Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 
 ---
@@ -101,8 +112,8 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 | Phase | State |
 | --- | --- |
 | 0 — Foundations | **Done.** `check` green: ruff, mypy strict, 3 import contracts, money guard, 100% branch coverage on `runtime/` |
-| 1 — Data plane & golden fixture | **Done.** 13 tables + RLS, seed generator, 4 checksummed artifacts, 7 fixture assertions, 91 + 12 tests |
-| 2 — Reconciliation engine | **Done.** 5 rules, greedy one-to-one, shuffle test, 3 read endpoints, 111 + 23 tests |
+| 1 — Data plane & golden fixture | **Done**, then reworked to a market-calibrated pipeline (D-23…D-27). 13 tables + RLS, calibration layer, scenario, ground truth, 10 fixture assertions |
+| 2 — Reconciliation engine | **Done.** 5 rules, greedy one-to-one, shuffle test, per-instrument fee rule, 4 read endpoints. 123 + 25 tests |
 | 3 — Tool framework & revenue | next |
 | 4–12 | not started |
 
@@ -159,3 +170,25 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 - **Auth is a stated gap until Phase 8.** The read endpoints connect as the owner role, which is
   exempt from RLS. The policies are proven by `tests/test_rls.py` as the non-owner role, but
   `merchant_id` currently selects rather than enforces. Documented in `routes/__init__.py`.
+
+### Notes from the calibration rework worth not rediscovering
+
+- **Volume share is not value share.** UPI is ~72% of payments and ~39% of the money. Each method
+  declares a volume share and a mean ticket; the value share is derived. A generator that used one
+  share for both models a world that cannot exist.
+- **Fees are per instrument** (`runtime/fees.py`), never flat. Zero-MDR UPI and RuPay debit really
+  cost zero — a flat percentage cannot express that, which is why a fee discrepancy used to be
+  noise. The schedule lives in `runtime/`, not `data/`, so the engine never imports the fixture.
+- **Hierarchical allocation is mandatory.** Apportioning 341 captures across 552 (day × method ×
+  issuer) cells in one pass gives every cell a base of zero and lets the remainder pass hand every
+  unit to the largest weights — NETBANKING and WALLET vanished entirely. Allocate methods first,
+  then days and issuers within a method.
+- **Failures must be apportioned across the window, not rounded per cell.** Rounding hundreds of
+  expectations each below 0.05 gives all zeroes and a fixture with a 100% success rate.
+- **Ticket values must be apportioned, not drawn independently.** ~350 samples from a heavy right
+  tail had enough variance to flip the sign of the revenue change.
+- **`ADD CONSTRAINT … NOT VALID`** for the decline-type check: rows written before the taxonomy have
+  no honest backfill, and picking a default would invent the field the investigation depends on.
+- The original ₹40L / ₹18,400 figures implied a **₹12,560 average ticket** — about 10× a realistic
+  Indian P2M ticket. Calibration exposed that; the merchant is now ~₹4L/month and the unresolved
+  value scales with it.

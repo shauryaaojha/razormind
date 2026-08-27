@@ -41,6 +41,7 @@ def _ledger_records(dataset: seed.Dataset) -> list[LedgerRecord]:
             merchant_id=txn.merchant_id,
             external_ref=txn.external_ref,
             utr=txn.utr,
+            instrument=txn.instrument,
             amount_paise=txn.amount_paise,
             fee_paise=txn.fee_paise,
             captured_at=txn.captured_at,
@@ -50,7 +51,7 @@ def _ledger_records(dataset: seed.Dataset) -> list[LedgerRecord]:
         if txn.status == "CAPTURED"
         and txn.captured_at is not None
         and txn.settlement_due_date is not None
-        and seed._captured_in(txn, seed.CURRENT)
+        and seed._captured_in(txn, seed.CURRENT_FROM, seed.CURRENT_TO)
     ]
 
 
@@ -122,7 +123,7 @@ def test_the_exception_breakdown_is_exact(result: ReconciliationResult) -> None:
 
 
 def test_the_unresolved_value_is_exact(result: ReconciliationResult) -> None:
-    assert result.unresolved_value_paise() == 1_840_000
+    assert result.unresolved_value_paise() == 184_000
     unresolved = sorted(
         exc.transaction_id
         for exc in result.ledger_exceptions
@@ -280,9 +281,43 @@ def test_amount_mismatches_report_the_discrepancy_not_the_payment(
 
 def test_fee_tolerance_has_a_one_rupee_floor() -> None:
     """Without the floor, half-up rounding on small payments trips false alarms."""
-    assert fee_tolerance_paise(expected_fee_paise(100_00)) == 100
-    assert fee_tolerance_paise(expected_fee_paise(10_000_00)) == 100
-    assert fee_tolerance_paise(expected_fee_paise(100_000_00)) == 500
+    card = "CREDIT_CARD"
+    assert fee_tolerance_paise(expected_fee_paise(100_00, card)) == 100
+    assert fee_tolerance_paise(expected_fee_paise(10_000_00, card)) == 100
+    # 1.90% of Rs 10,00,000 is Rs 19,000; half a percent of that is Rs 95.
+    assert fee_tolerance_paise(expected_fee_paise(1_000_000_00, card)) == 9_500
+
+
+def test_a_zero_mdr_instrument_expects_a_zero_fee() -> None:
+    """The flat 1% model could not represent a mandated zero rate at all.
+
+    That is why a fee discrepancy used to be arithmetic noise: there was no
+    commercial rule behind the expected number for it to violate.
+    """
+    assert expected_fee_paise(50_000_00, "UPI_BANK_ACCOUNT") == 0
+    assert expected_fee_paise(50_000_00, "RUPAY_DEBIT") == 0
+    assert expected_fee_paise(50_000_00, "CREDIT_CARD") == 95_000
+
+
+def test_an_unknown_instrument_is_refused_not_defaulted() -> None:
+    """A fallback rate would produce an expected fee no agreement supports."""
+    from reconciliation.engine import UnknownInstrumentError
+
+    with pytest.raises(UnknownInstrumentError, match="no fee rule"):
+        expected_fee_paise(100_00, "CRYPTO")
+
+
+def test_a_fee_discrepancy_names_the_rule_that_was_misapplied(
+    result: ReconciliationResult,
+) -> None:
+    """ "The fee was Rs 200 out" is not actionable. "This zero-MDR UPI payment
+    was billed under the credit-card agreement" is."""
+    flagged = [e for e in result.ledger_exceptions if e.category == "FEE_DISCREPANCY"]
+    assert len(flagged) == 2
+    named = [e.detail["matches_rule_for"] for e in flagged]
+    assert any(rule is not None for rule in named), (
+        "no discrepancy could be traced to a schedule entry"
+    )
 
 
 def test_fee_discrepancies_are_the_planted_ones(result: ReconciliationResult) -> None:

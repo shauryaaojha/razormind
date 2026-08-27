@@ -11,7 +11,7 @@ suffix, and every claim carries the unit alongside the value. Mixing "percent of
 
 | Suffix | Type | Range | Rendered as |
 | --- | --- | --- | --- |
-| `_paise` | `int` | any | `₹42,83,200.00` |
+| `_paise` | `int` | any | `₹3,90,122.95` |
 | `_ratio` | `Decimal(scale=6)` | `[0, 1]` for rates; signed for changes | `95.61%` |
 | `_pp` | `Decimal(scale=2)` | signed | `−6.49 pp` |
 | `_count` | `int` | `>= 0` | `342` |
@@ -139,7 +139,7 @@ verification a real check instead of a re-run of the tool.
 Every authoritative number resolves to source records.
 
 ```text
-Claim  "Revenue declined 18.00%"
+Claim  "Revenue declined 17.60%"
   -> Metric        net_revenue_change_ratio
   -> Verified      -0.180000
   -> Formula       (net_current - net_prior) / net_prior
@@ -157,7 +157,7 @@ Worked example for the unresolved figure
 ([C-08](00-corrections.md#c-08-m--18400-is-defined-two-incompatible-ways)):
 
 ```text
-unresolved_exception_value_paise = 1840000        (Rs 18,400)
+unresolved_exception_value_paise = 184000         (Rs 1,840)
   |
   +-- TXN_183  Rs 8,400  NO_COUNTERPART
   |     candidate SETTLEMENT_91  rule=AMOUNT_DATE_CANDIDATE  confidence=0.72

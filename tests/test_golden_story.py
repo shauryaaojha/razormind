@@ -49,7 +49,7 @@ def test_two_builds_are_identical() -> None:
     assert first.settlements == second.settlements
     assert first.refunds == second.refunds
     assert first.chargebacks == second.chargebacks
-    assert first.expectations == second.expectations
+    assert first.ground_truth == second.ground_truth
 
 
 def test_allocation_is_exact_regardless_of_weights() -> None:
@@ -74,8 +74,10 @@ def test_allocation_respects_a_floor() -> None:
 def test_allocation_rejects_impossible_inputs() -> None:
     with pytest.raises(ValueError, match="zero parts"):
         seed.allocate(10, [])
-    with pytest.raises(ValueError, match="weights must be positive"):
-        seed.allocate(10, [1, 0])
+    with pytest.raises(ValueError, match="weights must be non-negative"):
+        seed.allocate(10, [1, -1])
+    with pytest.raises(ValueError, match="must not all be zero"):
+        seed.allocate(10, [0, 0])
     with pytest.raises(ValueError, match="cannot cover a floor"):
         seed.allocate(10, [1, 1], floor=100)
 
@@ -93,12 +95,68 @@ def test_every_amount_is_a_whole_number_of_rupees(dataset: seed.Dataset) -> None
         assert movement.amount_paise % 100 == 0, movement.id
 
 
-def test_fees_are_exactly_one_percent_of_every_capture(dataset: seed.Dataset) -> None:
+def test_every_fee_follows_its_instrument_rule(dataset: seed.Dataset) -> None:
+    """Not a flat percentage. The funding source decides the fee.
+
+    Under a flat rate a fee discrepancy is arithmetic noise; under a schedule
+    it means a named commercial rule was applied wrongly.
+    """
+    from runtime.fees import FEE_SCHEDULE, Instrument
+
     for txn in dataset.transactions:
-        if txn.status == "CAPTURED":
-            assert txn.fee_paise == txn.amount_paise // 100, txn.id
+        if txn.status != "CAPTURED":
+            assert txn.fee_paise == 0, f"{txn.id} was declined but carries a fee"
+            continue
+        rule = FEE_SCHEDULE[Instrument(txn.instrument)]
+        assert txn.fee_paise == rule.fee_paise(txn.amount_paise), txn.id
+
+
+def test_zero_mdr_rails_really_cost_nothing(dataset: seed.Dataset) -> None:
+    """Bank-account UPI and RuPay debit carry no MDR, by mandate since 2020.
+
+    A flat 1% model could not express this at all -- which is why it had to go.
+    """
+    zero_rated = [
+        txn
+        for txn in dataset.transactions
+        if txn.status == "CAPTURED" and txn.instrument in {"UPI_BANK_ACCOUNT", "RUPAY_DEBIT"}
+    ]
+    assert zero_rated, "the fixture contains no zero-MDR captures at all"
+    assert all(txn.fee_paise == 0 for txn in zero_rated)
+
+
+def test_the_blended_fee_rate_is_nothing_like_one_percent(
+    dataset: seed.Dataset,
+) -> None:
+    """A mix dominated by zero-MDR UPI cannot cost 1% blended."""
+    current = dataset.ground_truth["current"]
+    assert isinstance(current, dict)
+    assert Decimal(str(current["effective_fee_rate_ratio"])) < Decimal("0.0100")
+
+
+def test_declines_carry_a_type_and_successes_do_not(dataset: seed.Dataset) -> None:
+    """NPCI separates technical from business declines and so does this fixture.
+
+    Without the split an investigation can only report that a success rate
+    moved, which is a symptom rather than a finding.
+    """
+    for txn in dataset.transactions:
+        if txn.status == "FAILED":
+            assert txn.decline_type in {"TECHNICAL_DECLINE", "BUSINESS_DECLINE"}, txn.id
+            assert txn.decline_reason, txn.id
         else:
-            assert txn.fee_paise == 0, txn.id
+            assert txn.decline_type is None, txn.id
+            assert txn.decline_reason is None, txn.id
+
+
+def test_the_incident_is_localised_to_named_issuers(dataset: seed.Dataset) -> None:
+    """A spike everywhere is weather. A spike at three issuers is a finding."""
+    incident = dataset.ground_truth["incident"]
+    assert isinstance(incident, dict)
+    affected = Decimal(str(incident["technical_decline_ratio_affected"]))
+    unaffected = Decimal(str(incident["technical_decline_ratio_unaffected"]))
+    assert affected > unaffected
+    assert affected > Decimal("0.03")
 
 
 def test_no_money_value_is_a_float(dataset: seed.Dataset) -> None:
@@ -152,7 +210,7 @@ def test_the_duplicate_shadows_a_real_capture(dataset: seed.Dataset) -> None:
 def test_the_unresolved_records_have_no_settlement(dataset: seed.Dataset) -> None:
     by_id = {txn.id: txn for txn in dataset.transactions}
     refs = {stl.bank_ref for stl in dataset.settlements}
-    for txn_id, amount, _ in seed.NO_COUNTERPART:
+    for txn_id, amount in seed.NO_COUNTERPART:
         assert by_id[txn_id].amount_paise == amount
         assert by_id[txn_id].external_ref not in refs
 
@@ -195,7 +253,7 @@ def test_every_settlement_sits_inside_the_bank_window(dataset: seed.Dataset) -> 
     ledger_ids = {
         txn.id
         for txn in dataset.transactions
-        if txn.status == "CAPTURED" and seed._captured_in(txn, seed.CURRENT)
+        if txn.status == "CAPTURED" and seed._captured_in(txn, seed.CURRENT_FROM, seed.CURRENT_TO)
     }
     refs = {txn.external_ref for txn in dataset.transactions if txn.id in ledger_ids}
     planted = {seed.NEAR_MISS_ID, *(stl_id for stl_id, _ in seed.UNMATCHED_BANK_EXTRA)}
@@ -223,16 +281,16 @@ def test_timing_lags_stay_inside_the_exception_window(dataset: seed.Dataset) -> 
     assert sum(1 for lag in lags if lag > 0) == seed.TIMING_LAG_COUNT
 
 
-def test_headline_numbers_match_the_documentation(dataset: seed.Dataset) -> None:
-    """The numbers a reader would check against README.md and the demo script."""
-    current = dataset.expectations["current"]
-    recon = dataset.expectations["reconciliation"]
-    assert isinstance(current, dict)
-    assert isinstance(recon, dict)
+def test_the_designed_counts_are_exact(dataset: seed.Dataset) -> None:
+    """Counts the scenario designs, so they are legitimately fixed.
 
-    assert current["net_revenue_paise"] == 409_786_800  # Rs 40,97,868
-    assert current["gross_payments_paise"] == 428_320_000  # Rs 42,83,200
-    assert recon["clean_match_rate_ratio"] == "0.956140"  # 95.61%
+    The *money* is not asserted here any more, and should not be: it emerges
+    from the calibration layer, so a hard-coded revenue figure would only prove
+    that somebody wrote the same number twice. What is checked instead is that
+    every identity closes -- see `scripts/verify_seed.py`.
+    """
+    recon = dataset.ground_truth["reconciliation"]
+    assert isinstance(recon, dict)
     assert (
         recon["ledger_count"],
         recon["bank_count"],
@@ -240,21 +298,54 @@ def test_headline_numbers_match_the_documentation(dataset: seed.Dataset) -> None
         recon["matched_clean"],
         recon["exception_count"],
     ) == (342, 341, 338, 327, 15)
+    assert recon["clean_match_rate_ratio"] == "0.956140"  # 95.61%
 
-    attribution = dataset.expectations["attribution"]
+
+def test_the_bridge_closes_with_no_residual(dataset: seed.Dataset) -> None:
+    """The property that matters, whatever the numbers turn out to be."""
+    attribution = dataset.ground_truth["attribution"]
     assert isinstance(attribution, dict)
-    assert attribution["net_change_ratio"] == "-0.180000"  # exactly -18.00%
+    terms = attribution["terms"]
+    assert isinstance(terms, dict)
+
     assert attribution["rounding_residual_paise"] == 0
+    assert sum(int(str(v)) for v in terms.values()) == attribution["net_change_paise"]
+    assert int(str(attribution["net_change_paise"])) < 0, "the scenario is a decline"
 
 
-def test_the_unresolved_value_is_reported_as_a_confidence_band() -> None:
+def test_the_ground_truth_carries_its_own_provenance(dataset: seed.Dataset) -> None:
+    """A judge asking "where did this data come from?" should not need to ask twice."""
+    provenance = dataset.ground_truth["provenance"]
+    assert isinstance(provenance, dict)
+    assert provenance["transaction_records"] == "synthetic, seeded"
+    assert "NPCI" in str(provenance["aggregate_calibration"])
+    assert "synthetic" in str(provenance["disclaimer"])
+    counts = provenance["parameter_counts"]
+    assert isinstance(counts, dict)
+    # Both kinds must be present. All-CITED would be a lie; all-ASSUMED would
+    # mean the calibration layer is decoration.
+    assert counts["CITED"] > 0
+    assert counts["ASSUMED"] > 0
+
+
+def test_the_unresolved_value_is_reported_as_a_confidence_band(
+    dataset: seed.Dataset,
+) -> None:
     """Rs 18,400 bounds the figures; it is never a term in the bridge.
 
     C-02's third error was treating unresolved exceptions as a cause of the
     revenue decline. It is not a cause -- it is a statement about how well the
-    causes are known.
+    causes are known, and it must stay out of the attribution.
     """
     from runtime.money import ratio
 
-    band = ratio(verify_seed.UNRESOLVED_PAISE, 409_786_800)
-    assert Decimal("0.0044") < band < Decimal("0.0046")  # ~0.45%
+    current = dataset.ground_truth["current"]
+    attribution = dataset.ground_truth["attribution"]
+    assert isinstance(current, dict)
+    assert isinstance(attribution, dict)
+    terms = attribution["terms"]
+    assert isinstance(terms, dict)
+
+    band = ratio(verify_seed.UNRESOLVED_PAISE, int(str(current["net_revenue_paise"])))
+    assert Decimal(0) < band < Decimal("0.01")
+    assert verify_seed.UNRESOLVED_PAISE not in {abs(int(str(v))) for v in terms.values()}

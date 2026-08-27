@@ -39,6 +39,10 @@ class LedgerRecord:
     merchant_id: str
     external_ref: str
     utr: str | None
+    #: The funding source, which is what decides the expected fee. Not the
+    #: rail: bank-account UPI carries no MDR, the same rail funded from a
+    #: prepaid wallet carries an interchange.
+    instrument: str
     amount_paise: Paise
     fee_paise: Paise
     captured_at: datetime

@@ -1,0 +1,116 @@
+{
+  "_note": "The scenario is the hidden definition of the world. The generator derives every record from it; nothing is hand-crafted. Rates and multipliers are strings so they parse as Decimal -- a float would be the one thing this project forbids everywhere else.",
+  "id": "revenue_decline_v1",
+  "name": "August Revenue Decline",
+  "description": "A UPI technical-decline incident at three issuers, on top of a larger softening in attempt volume. The incident is real, localised, and NOT the primary revenue driver -- separating the two is the finding.",
+  "seed": 42,
+  "merchant_id": "M123",
+  "merchant_name": "Kabir Retail Pvt Ltd",
+  "currency": "INR",
+
+  "span": { "from": "2026-05-26", "to": "2026-08-24" },
+  "windows": {
+    "current": { "from": "2026-08-01", "to": "2026-08-24" },
+    "prior": { "from": "2026-07-01", "to": "2026-07-24" }
+  },
+
+  "_quiet_band_note": "No captures in the two days before a window. A capture just before a window -- especially after the cutoff -- settles inside that window's cycle and would read as an unmatched bank row (D-19).",
+  "quiet_band_days": 2,
+
+  "_capture_counts_note": "Capture counts are scenario DESIGN parameters. Everything downstream of them -- failures, values, fees, success rates, the decline -- is derived from the calibration layer and emerges. This is the line between 'we chose the shape of the story' and 'we chose the answer'.",
+  "capture_counts": {
+    "current": 341,
+    "prior": 411,
+    "filler_per_day_min": 18,
+    "filler_per_day_max": 24
+  },
+
+  "issuers": [
+    { "id": "BANK_A", "share": "0.26" },
+    { "id": "BANK_B", "share": "0.21" },
+    { "id": "BANK_C", "share": "0.19" },
+    { "id": "BANK_D", "share": "0.16" },
+    { "id": "BANK_E", "share": "0.11" },
+    { "id": "BANK_F", "share": "0.07" }
+  ],
+
+  "incident": {
+    "_note": "A technical-decline spike, not a mystery. TD is a back-end failure at a bank or at NPCI; BD is the customer's side and stays roughly flat. That separation is what lets the agent name a cause instead of a symptom.",
+    "id": "upi_issuer_degradation",
+    "start": "2026-08-09",
+    "end": "2026-08-19",
+    "affected_method": "UPI",
+    "affected_issuers": ["BANK_A", "BANK_B", "BANK_C"],
+    "technical_decline_multiplier": "11.0",
+    "business_decline_multiplier": "1.05"
+  },
+
+  "demand": {
+    "_note": "Attempt volume softens independently of the incident. Without it the whole decline would be attributable to the incident, and the bridge's rate/volume split would have nothing to separate.",
+    "prior_capture_index": "1.000",
+    "current_capture_index": "0.830"
+  },
+
+  "refunds": {
+    "prior_count": 8,
+    "current_count": 10,
+    "prior_rate_of_gross": "0.0194",
+    "current_rate_of_gross": "0.0290"
+  },
+
+  "chargebacks": {
+    "prior_count": 2,
+    "current_count": 3,
+    "prior_rate_of_gross": "0.0021",
+    "current_rate_of_gross": "0.0043"
+  },
+
+  "settlement_policy": {
+    "_note": "A commercial term, not a law (D-25). Overridable per scenario.",
+    "expected_delay_business_days": 2,
+    "cutoff_hour_ist": 18,
+    "weekend_behavior": "next_business_day",
+    "holiday_behavior": "next_business_day"
+  },
+
+  "anomalies": {
+    "_note": "Injected at fixed indices so the counts never drift. These are the only hand-placed records in the dataset.",
+    "timing_lag": { "count": 7, "lag_business_days": [1, 2, 3] },
+    "amount_mismatch": { "count": 2, "deltas_paise": [100, 25000] },
+    "fee_discrepancy": {
+      "count": 2,
+      "_note": "Applied as a WRONG INSTRUMENT RULE, not a random perturbation. The bank bills a zero-MDR UPI payment at the credit-card rate, and a credit-card payment at the debit rate. That is a real reconciliation finding with a named cause.",
+      "misapplied_rules": ["CREDIT_CARD", "OTHER_DEBIT"]
+    },
+    "no_counterpart": {
+      "_note": "Rs 840 / 620 / 380, totalling Rs 1,840. The original spec put these at Rs 18,400 against Rs 40L of monthly net revenue -- but Rs 40L over 341 payments implies a Rs 12,560 average ticket, roughly ten times a realistic Indian P2M ticket. With calibrated ticket sizes this merchant turns over about Rs 4L a month, so the unresolved value scales with it and stays a ~0.47% confidence band rather than a 4.7% one.",
+      "count": 3,
+      "transaction_ids": ["TXN_183", "TXN_247", "TXN_402"],
+      "amounts_paise": [84000, 62000, 38000]
+    },
+    "possible_duplicate": { "count": 1, "transaction_id": "TXN_511" },
+    "unmatched_bank": {
+      "count": 3,
+      "near_miss": {
+        "settlement_id": "SETTLEMENT_91",
+        "shadows_transaction_id": "TXN_183",
+        "lag_business_days": 4,
+        "_note": "Same amount, no reference, four business days past the SLA. Reachable only by rule 5 at 0.72, below the 0.85 auto-match threshold -- so it is a rejected candidate, not a match."
+      },
+      "extra": [
+        { "settlement_id": "SETTLEMENT_318", "amount_paise": 73110 },
+        { "settlement_id": "SETTLEMENT_1204", "amount_paise": 45630 }
+      ]
+    }
+  },
+
+  "expected_diagnosis": {
+    "_note": "What a correct investigation must conclude. Phase 11 scores against this, and verify-seed asserts it matches what the generator actually produced -- a ground truth that disagrees with its own dataset is worse than none.",
+    "primary_driver": "attempt_volume_decline",
+    "secondary_driver": "technical_payment_failures",
+    "affected_method": "UPI",
+    "affected_issuers": ["BANK_A", "BANK_B", "BANK_C"],
+    "must_not_conclude": "the technical-decline incident explains the revenue decline",
+    "_trap": "The incident is the salient event in the window, and a model reasoning from narrative rather than arithmetic will name it as the cause. It is real, it is localised, and it is NOT the primary driver. Separating a genuine operational incident from the actual revenue driver is the finding."
+  }
+}

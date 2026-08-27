@@ -38,7 +38,7 @@ jobs:
 
       # Before the tests, deliberately. Every test below asserts against this
       # fixture; a drifted fixture makes them wrong and green.
-      - name: verify-seed (the seven fixture assertions)
+      - name: verify-seed (the fixture assertions)
         run: docker compose run --rm tools scripts/task.py verify-seed
 
       - name: pytest + 100% branch coverage on runtime/

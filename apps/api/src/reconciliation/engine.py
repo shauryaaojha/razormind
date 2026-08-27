@@ -13,6 +13,7 @@ from datetime import date
 from decimal import Decimal
 
 from runtime.calendar import MAX_TIMING_LAG_BUSINESS_DAYS
+from runtime.fees import FEE_SCHEDULE, Instrument
 from runtime.money import Paise, apply_rate, ratio
 
 from .models import (
@@ -27,7 +28,6 @@ from .models import (
 from .rules import RULES, amount_delta, lag_days, propose
 
 __all__ = [
-    "FEE_RATE",
     "FEE_TOLERANCE_FLOOR_PAISE",
     "FEE_TOLERANCE_RATE",
     "EmptyPeriodError",
@@ -48,7 +48,6 @@ class EmptyPeriodError(ValueError):
     """
 
 
-FEE_RATE = Decimal("0.0100")
 FEE_TOLERANCE_RATE = Decimal("0.005")
 
 #: The Rs 1.00 floor exists so half-up rounding on small transactions never
@@ -56,8 +55,29 @@ FEE_TOLERANCE_RATE = Decimal("0.005")
 FEE_TOLERANCE_FLOOR_PAISE = 100
 
 
-def expected_fee_paise(amount_paise: Paise) -> Paise:
-    return apply_rate(amount_paise, FEE_RATE)
+class UnknownInstrumentError(ValueError):
+    """A record names an instrument with no fee rule.
+
+    Refused rather than defaulted. Falling back to some average rate would
+    produce an expected fee that no commercial agreement supports, and every
+    discrepancy computed against it would be fiction.
+    """
+
+
+def expected_fee_paise(amount_paise: Paise, instrument: str) -> Paise:
+    """What the merchant agreement says this payment should cost.
+
+    Per **instrument**, not a flat percentage. Zero-MDR rails really are zero;
+    a card carries its negotiated rate; netbanking is billed per transaction.
+    That is what turns a fee discrepancy from arithmetic noise into a finding
+    with a named cause -- "this zero-MDR UPI payment was billed at the credit
+    card rate" is actionable in a way that "the fee was Rs 200 out" is not.
+    """
+    try:
+        rule = FEE_SCHEDULE[Instrument(instrument)]
+    except ValueError as error:
+        raise UnknownInstrumentError(f"no fee rule for instrument {instrument!r}") from error
+    return rule.fee_paise(amount_paise)
 
 
 def fee_tolerance_paise(expected: Paise) -> Paise:
@@ -181,7 +201,7 @@ def _classify_pair(ledger: LedgerRecord, bank: BankRecord) -> list[Reconciliatio
             )
         )
 
-    expected = expected_fee_paise(ledger.amount_paise)
+    expected = expected_fee_paise(ledger.amount_paise, ledger.instrument)
     tolerance = fee_tolerance_paise(expected)
     fee_delta = bank.fee_paise - expected
     if abs(fee_delta) > tolerance:
@@ -193,14 +213,38 @@ def _classify_pair(ledger: LedgerRecord, bank: BankRecord) -> list[Reconciliatio
                 settlement_id=bank.id,
                 amount_paise=abs(fee_delta),
                 detail={
+                    "instrument": ledger.instrument,
                     "expected_fee_paise": expected,
                     "actual_fee_paise": bank.fee_paise,
                     "tolerance_paise": tolerance,
                     "fee_delta_paise": fee_delta,
+                    # Which rule the bank looks to have applied instead. This
+                    # is the difference between "the fee is wrong" and "the fee
+                    # was billed under the credit-card agreement".
+                    "matches_rule_for": _instrument_matching_fee(
+                        ledger.amount_paise, bank.fee_paise, tolerance
+                    ),
                 },
             )
         )
     return found
+
+
+def _instrument_matching_fee(
+    amount_paise: Paise, actual_fee: Paise, tolerance: Paise
+) -> str | None:
+    """The instrument whose rule would have produced the fee the bank charged.
+
+    Named, not guessed: if exactly one schedule entry reproduces the amount
+    within tolerance, that is almost certainly the rule that was misapplied.
+    Ambiguity returns nothing rather than the first plausible match.
+    """
+    candidates = [
+        instrument.value
+        for instrument, rule in FEE_SCHEDULE.items()
+        if abs(rule.fee_paise(amount_paise) - actual_fee) <= tolerance
+    ]
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def reconcile(

@@ -319,5 +319,101 @@ a bank file that never arrived is a real and reportable answer.
 
 **Cost to reverse.** Low. One guard, and a caller that has to say why.
 
+---
+
+### D-23 — The dataset is market-calibrated, not arbitrary
+
+**Decision.** A three-layer pipeline: public NPCI/RBI statistics → `data/calibration/` →
+`data/scenarios/` → generator → ledger, settlements, and `golden/ground_truth.json`. Every
+calibration parameter carries a provenance tag — `CITED`, `DERIVED`, or `ASSUMED` — and
+`data/calibration/sources.md` redeems each one.
+
+**Why.** "We generated 400 random rows" is not defensible, and neither is a dataset calibrated
+against numbers nobody can trace. The tags are what make the difference: a merchant's own payment
+mix is not a published statistic and never will be, so it is labelled `ASSUMED` with a rationale
+rather than dressed up as an observation. Overstating the claim would be worse than not making it.
+
+**What is and is not claimed.** Transaction-level records are synthetic and seeded; no real
+customer, merchant, or bank record is represented. Aggregate distributions and operational
+characteristics are calibrated against public statistics. Failure rates are not Razorpay's.
+
+**Cost to reverse.** High — the generator, the fee model and the ground truth all rest on it.
+
+---
+
+### D-24 — Fees are per instrument, and the flat 1% is gone
+
+**Decision.** `runtime/fees.py` holds a fee schedule keyed by **instrument** (the funding source),
+not by rail. Bank-account UPI and RuPay debit are zero-MDR by mandate; PPI-funded UPI carries an
+interchange above ₹2,000; cards carry a negotiated rate; netbanking is billed flat per transaction.
+
+**Why.** The flat 1% could not represent a mandated zero rate *at all*, which meant a
+`FEE_DISCREPANCY` was arithmetic noise — the expected number had no commercial rule behind it for
+the actual to violate. Under a schedule, a discrepancy means a *named* rule was misapplied, and
+the engine now reports which one (`matches_rule_for`). "This zero-MDR UPI payment was billed under
+the credit-card agreement" is actionable; "the fee was ₹200 out" is not.
+
+The schedule lives in `runtime/`, not `data/calibration/`: the reconciliation engine needs it to
+know what a settlement should have cost, and the application must never import the fixture. The
+calibration layer annotates it with provenance rather than owning it.
+
+**Cost to reverse.** High. It is in the schema, the engine, the fixture and the API.
+
+---
+
+### D-25 — Settlement timing is a scenario parameter, not a law
+
+**Decision.** `settlement_due_date(captured_at, lag_business_days, cutoff)` takes the lag and the
+cutoff as parameters with defaults. Scenarios may override them.
+
+**Why.** There is no universal statutory T+2 for Indian payment-gateway settlement; it is a
+commercial term varying by acquirer, merchant risk category and instrument. Hard-coding it as a
+constant would be inventing a regulation, and would make the reconciliation engine untestable
+against any merchant on different terms.
+
+**Cost to reverse.** Low. The defaults preserve every existing caller.
+
+---
+
+### D-26 — Counts are designed; money is derived
+
+**Decision.** The scenario fixes capture counts and the planted anomaly counts. Everything else —
+failures, ticket values, fees, success rates, decline rates, and the revenue decline itself —
+emerges from the calibration layer. `verify_seed.py` therefore asserts *identities and calibration
+bands*, not hard-coded revenue figures.
+
+**Why.** This is the line between choosing the shape of a story and choosing its answer. A check
+that asserted `net_revenue == 40_97_868` would only be asserting that somebody wrote the same
+number twice; a check that the bridge closes with a zero residual, that baseline technical
+declines land inside the published 0.7–0.8% band, and that realised method shares match the
+declared mix, is checking something.
+
+It also caught a real defect in the original figures: ₹40L of monthly net revenue over 341
+payments implies a **₹12,560 average ticket**, roughly ten times a realistic Indian P2M ticket.
+With calibrated ticket sizes this merchant turns over about Rs 3,90,122 a
+month, and the unresolved exception value scales with it.
+
+**Cost to reverse.** Medium. The assertions would have to be rewritten around fixed numbers again.
+
+---
+
+### D-27 — The ground truth is checked against its own dataset
+
+**Decision.** `ground_truth.json` carries an `expected_diagnosis`, and `verify-seed` asserts that
+the declared primary driver really is the largest term in the generated attribution.
+
+**Why.** A ground truth that disagrees with the data it ships is worse than none: every evaluation
+scored against it would be scoring the wrong thing, confidently. The first version of this
+scenario declared the technical-decline incident as the primary driver; the generated data said
+attempt volume. The check is what surfaced that, and the declared answer moved to match the data.
+
+**The trap this creates is deliberate.** The incident is the salient event in the window, and a
+model reasoning from narrative rather than arithmetic will name it as the cause. It is real, it is
+localised to three issuers, and it is *not* the primary driver. Separating a genuine operational
+incident from the actual revenue driver is the finding.
+
+**Cost to reverse.** Low.
+
+
 
 

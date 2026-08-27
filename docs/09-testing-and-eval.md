@@ -65,7 +65,9 @@ forbidden_modules = llm
 
 ```python
 @pytest.mark.parametrize("bad_output,expected_failure", [
-    ("Revenue fell by 18.2%",              "VALUE_MISMATCH"),      # verified is -18.00%
+    ("Revenue fell by 18.2%",              "VALUE_MISMATCH"),      # the spec's own error,
+                                                                   # kept as a permanent
+                                                                   # regression test
     ("Revenue fell by Rs 5,00,000",        "UNKNOWN_METRIC"),
     ("Success rate fell 6.49%",            "UNIT_MISMATCH"),       # it is pp, not %
     ("Refunds rose 24%",                   "UNKNOWN_METRIC"),
