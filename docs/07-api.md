@@ -96,8 +96,25 @@ Heartbeat comment every 15s so proxies do not close the connection.
 
 ### `GET /executions/{id}`
 
-The full record: input, intent, plan, tool executions, verification, evidence, provenance, final
-response, `response_source`, error. This is the audit view from vision §6.3.
+The record: merchant, period, status, `response_source`, error. Intent, plan, tool executions and
+the final response arrive with the phases that produce them; as of Phase 5 the status is
+`VERIFYING`, `EXPLAINING` or `BLOCKED`, and a blocked one carries the failing layer:
+
+```json
+{
+  "execution_id": "…",
+  "status": "BLOCKED",
+  "response_source": null,
+  "error": {
+    "code": "VERIFICATION_FAILED",
+    "message": "verification stopped at layer FORMULA",
+    "detail": { "blocked_at": "FORMULA", "failures": ["FORMULA: …"] }
+  }
+}
+```
+
+`response_source: null` on a blocked execution is the persisted form of "no text was generated"
+(Invariant 4).
 
 ### `GET /executions?merchant_id=&status=&limit=&cursor=`
 
@@ -178,10 +195,31 @@ drawer opens onto.
 
 ## Evidence
 
+### `GET /executions/{id}/evidence`
+
+The index: every metric the execution published, with its unit, window, slice and whether it is
+derived or a fold. Optional `metric_id` filter.
+
 ### `GET /executions/{id}/evidence/{evidence_id}`
 
-One evidence node plus its immediate operands, each as a resolvable `evidence_id`. The drawer
-lazy-loads down the tree instead of fetching the whole graph.
+One evidence node, its support, and **the whole chain beneath it** — not just its immediate
+operands. The original design had the drawer lazy-load level by level; one round trip is better
+here for two reasons. The graph is bounded at a handful of nodes (the revenue bridge's deepest
+chain is four levels), so N requests buy nothing. And a partially loaded provenance tree *looks
+complete*: "is this chain intact?" cannot be answered until the last request returns, which is the
+one question the drawer exists to answer.
+
+`source_record_ids` on the response is the flattened, deduplicated set the whole chain reaches.
+
+Two notes on the path. An evidence id contains slashes — it is
+`<tool>/<version>/<metric>/<window>` — so the parameter takes the rest of the URL. And a
+dimensioned row appends its slice after a **tilde**, `…_2026-08-24~UPI`, because `#` is the
+fragment delimiter and would never reach the server: the request would have silently resolved to
+the blended row and returned a plausible wrong number with a citation attached
+([D-42](decisions.md#d-42--the-evidence-ids-slice-separator-is--not-)).
+
+A blocked execution answers **409 `EXECUTION_BLOCKED`**, naming the layer — not a 404, which would
+read as "no such record", and not the evidence, which it never stored.
 
 ## Health
 

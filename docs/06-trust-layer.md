@@ -11,10 +11,16 @@ suffix, and every claim carries the unit alongside the value. Mixing "percent of
 
 | Suffix | Type | Range | Rendered as |
 | --- | --- | --- | --- |
-| `_paise` | `int` | any | `₹3,90,122.95` |
-| `_ratio` | `Decimal(scale=6)` | `[0, 1]` for rates; signed for changes | `95.61%` |
-| `_pp` | `Decimal(scale=2)` | signed | `−6.49 pp` |
+| `_paise` | `int` | `>= 0` unless the metric is declared **signed** | `₹3,90,122.95` |
+| `_ratio` | `Decimal(scale=6)` | `[0, 1]` unless declared **signed** | `95.61%` |
+| `_pp` | `Decimal(scale=2)` | signed | `-6.49 pp` |
 | `_count` | `int` | `>= 0` | `342` |
+
+`signed` is a field on the metric, not a convention. "Money is non-negative" is false for an
+attribution effect and "a ratio is in [0, 1]" is false for `net_revenue_change_ratio`, so one
+blanket rule would have to be weakened until it checked nothing. Declared per metric, a negative
+`gross_payments_paise` is a caught defect and a negative attribution effect is not
+([D-38](decisions.md#d-38--the-vocabulary-declares-which-metrics-may-be-negative)).
 
 Registered metrics (v1):
 
@@ -72,7 +78,7 @@ docs change, deliberately.
 
 `by_method.success_rate_ratio` is **one** metric measured over a `method` dimension, with the four
 rails as its permitted values. Each evidence row names its slice, and the evidence id carries it:
-`.../by_method.success_rate_ratio/2026-08-01_2026-08-24#UPI`. Enumerating a metric per rail would
+`.../by_method.success_rate_ratio/2026-08-01_2026-08-24~UPI`. Enumerating a metric per rail would
 put twenty-four entries here for six quantities, and would assert that a UPI success rate and a
 card success rate are different *metrics* when they are the same computation over different
 records.
@@ -98,16 +104,70 @@ layer has something to compare. Two tools disagreeing about it is a defect nothi
 Runs after execution, before any prose exists. Five layers, in order — the first failure blocks.
 
 ```text
-1. TYPE        every output field matches output_model; no float in a _paise field
-2. RANGE       refunds/fees/chargebacks >= 0; ratios in [0,1]; counts >= 0
-3. CONSISTENCY cross-tool: metrics common to two tools agree exactly
-4. FORMULA     each published metric recomputed from its Formula and inputs; must match exactly
-5. SOURCE      every source_record_id in the evidence exists and is inside the period
+1. TYPE        every output matches its model; no float anywhere; the value matches the unit
+2. RANGE       every value inside the range its metric declares; ratios quantized to scale 6
+3. CONSISTENCY metrics two tools share agree exactly, including declared equivalences
+4. FORMULA     every derived metric re-evaluated from its own expression; operands resolve
+5. SOURCE      every cited record exists, is inside the period, and a SUM re-folds
 ```
 
+**The order is the contract, and so is stopping.** A layer runs only if every layer before it
+passed. That is not an optimisation: a formula re-evaluated against operands that failed their
+range check produces a number nobody should read, and reporting it beside a range failure invites
+someone to pick whichever they prefer. One failing layer, named, is the whole answer.
+
 Layer 4 is what makes evidence meaningful: the verifier does not trust the tool's output, it
-re-evaluates the declared formula against the declared inputs and compares. A tool that reports a
-number its own formula does not produce fails here.
+re-evaluates the declared formula — through `evidence/formula.py`, a grammar with no calls, so it
+cannot re-run the tool — against the declared inputs and compares. A tool that reports a number its
+own formula does not produce fails here. It also checks that each operand *resolves* to a row in
+this execution and that the declared input equals that row's value, because a citation nothing
+compares is decoration.
+
+**Where a leaf is checked.** `gross_payments_paise` has no expression to re-evaluate. Layer 4 takes
+the one identity available without the database — a `COUNT` is the size of the set it cites — and
+layer 5 does the rest: the records exist, they sit inside the window, and summing the declared
+column over them lands on the published figure. That re-fold is the leaf's answer to layer 4, and
+it cannot happen before the records are resolved
+([D-41](decisions.md#d-41--a-leafs-re-fold-is-layer-5s-work-not-layer-4s)).
+
+### Which date is "inside the period"
+
+Layer 5 reads as one check and is four. Four scoping rules are in play, all deliberate:
+
+```text
+ATTEMPT_DATE          a payment belongs to the window it was attempted in --
+                      a failure has no capture instant
+CAPTURE_DATE          the reconciliation ledger is captures; a settlement is
+                      due against a capture
+PARENT_ATTEMPT_DATE   a refund or chargeback belongs to the window of the
+                      payment it reverses, not the one it was raised in (D-31)
+VALUE_DATE            a settlement line lands in the bank window, which is the
+                      capture window shifted by the cycle (D-18)
+```
+
+`Aggregation.scoped_by` names the rule, so layer 5 checks the scoping the tool *declared* rather
+than one the verifier assumed. A tool that declares `ATTEMPT_DATE` and scopes by capture date is
+caught, which nothing else in the system would notice
+([D-37](decisions.md#d-37--evidence-declares-the-date-rule-that-scoped-it)).
+
+It is also why `bank_count` is filed under the **bank** window rather than the analysis window: it
+measures the settlement window, the period is part of a row's identity, and the alternative was to
+relax layer 5 until it stopped catching real period errors
+([D-39](decisions.md#d-39--bank_count-is-filed-under-the-bank-window-not-the-analysis-window)).
+
+### What a failure produces
+
+```text
+VERIFYING  -> BLOCKED      a layer failed; error_json names it; no prose, ever
+           -> EXPLAINING   every layer passed; the numbers may now be phrased
+```
+
+A blocked execution is a **row**, not an absence: "we could not verify this, and layer FORMULA is
+why" is an answer, while a missing record is indistinguishable from a request that never arrived.
+It stores no evidence at all, because a stored row is something the API serves and the drawer
+walks — and serving the support for a number that failed verification is exactly how an unverified
+figure reaches a reader with a citation attached
+([D-43](decisions.md#d-43--a-blocked-execution-is-a-row-and-it-stores-no-evidence)).
 
 ### Bridge identity
 
@@ -188,6 +248,7 @@ class Aggregation(BaseModel):
     over: str                       # "transactions"
     predicate: str                  # the record set, in words
     unit: Literal["paise", "ratio", "pp", "count"]
+    scoped_by: Anchor               # the same claim, machine-readable (D-37)
 
 class Evidence(BaseModel):
     id: str
@@ -200,6 +261,7 @@ class Evidence(BaseModel):
     value: int | Decimal
     period_from: str
     period_to: str
+    dimension_value: str | None     # "UPI" on a by_method.* row
 
     formula: Formula | None         # exactly one of these two
     aggregation: Aggregation | None
@@ -219,6 +281,13 @@ verification a real check instead of a re-run of the tool. The interpreter retur
 unrounded** `Decimal`; rounding to paise or to a scale-6 ratio is a separate single step in
 `runtime.money`, so "the tool and its formula disagree" and "two roundings disagree" stay
 distinguishable failures.
+
+**A derived metric cites operands; a leaf cites records; never both.** A `Formula` row that
+also names source records has two accounts of where its number came from, and nothing keeps them in
+step: the cited set can drift from the sets its operands cite while every check still passes. It is
+not extra provenance either — the walk reaches those same records one level lower, with the fold
+that produced them attached
+([D-40](decisions.md#d-40--a-derived-metric-cites-operands-a-leaf-cites-records-never-both)).
 
 **A metric has a formula or an aggregation, never both**
 ([D-29](decisions.md#d-29--evidence-carries-a-formula-or-an-aggregation-never-both-never-neither)).
@@ -255,6 +324,13 @@ Claim  "Revenue declined 17.60%"
 
 The drawer walks this graph. Because every level is an `Evidence` row with a `Formula`, the UI is
 a generic recursive renderer — it has no knowledge of revenue, refunds, or reconciliation.
+
+`provenance/builder.py` does the walk. A cycle is **refused**, never truncated: evidence describes
+a computation, and a computation whose operands depend on their own result did not happen, so a
+depth limit would quietly render half of it as though it had. `source_records()` collapses the
+whole chain to the deduplicated record ids at the bottom, which is the answer to "show me the
+transactions behind this percentage" — 775 of them under `net_revenue_change_ratio` on the golden
+window.
 
 Worked example for the unresolved figure
 ([C-08](00-corrections.md#c-08-m--18400-is-defined-two-incompatible-ways)):

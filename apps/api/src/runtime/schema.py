@@ -27,6 +27,7 @@ from sqlalchemy import (
     Integer,
     MetaData,
     Numeric,
+    PrimaryKeyConstraint,
     String,
     Table,
     Text,
@@ -131,6 +132,13 @@ def _one_of(column: str, values: tuple[str, ...]) -> CheckConstraint:
 
 
 _NOW = text("now()")
+
+#: A nullable JSONB column, where "absent" must reach the database as SQL NULL
+#: rather than as the JSON literal ``null``. The distinction is not academic:
+#: ``(formula_json IS NULL) <> (aggregation_json IS NULL)`` is how D-29 is
+#: enforced at the storage layer, and a column holding ``'null'::jsonb`` is not
+#: NULL, so every leaf row would violate a constraint that is in fact satisfied.
+_NULLABLE_JSONB = JSONB(none_as_null=True)
 
 # --------------------------------------------------------------------------
 # identity and tenancy
@@ -408,12 +416,12 @@ agent_executions = Table(
     Column("merchant_id", String(32), ForeignKey("merchants.id"), nullable=False),
     Column("client_request_id", Text, nullable=True),
     Column("input", Text, nullable=False),
-    Column("intent_json", JSONB, nullable=True),
-    Column("plan_json", JSONB, nullable=True),
+    Column("intent_json", _NULLABLE_JSONB, nullable=True),
+    Column("plan_json", _NULLABLE_JSONB, nullable=True),
     Column("period_from", Date, nullable=True),
     Column("period_to", Date, nullable=True),
     Column("status", Text, nullable=False),
-    Column("error_json", JSONB, nullable=True),
+    Column("error_json", _NULLABLE_JSONB, nullable=True),
     Column("response_source", Text, nullable=True),
     Column("grounding_attempts", Integer, nullable=False, server_default=text("0")),
     Column("seed", BigInteger, nullable=True),
@@ -447,9 +455,9 @@ tool_executions = Table(
     Column("tool_name", Text, nullable=False),
     Column("tool_version", Text, nullable=False),
     Column("input_json", JSONB, nullable=False),
-    Column("output_json", JSONB, nullable=True),
+    Column("output_json", _NULLABLE_JSONB, nullable=True),
     Column("status", Text, nullable=False),
-    Column("error_json", JSONB, nullable=True),
+    Column("error_json", _NULLABLE_JSONB, nullable=True),
     Column("started_at", DateTime(timezone=True), nullable=False),
     Column("finished_at", DateTime(timezone=True), nullable=True),
     Column("duration_ms", Integer, nullable=True),
@@ -463,27 +471,49 @@ tool_executions = Table(
 evidence = Table(
     "evidence",
     METADATA,
-    Column("id", UUID(as_uuid=True), primary_key=True),
     Column(
         "execution_id",
         UUID(as_uuid=True),
         ForeignKey("agent_executions.id", ondelete="CASCADE"),
         nullable=False,
     ),
+    # The id is the metric's *address*, not a surrogate key:
+    # ``finance.revenue_analysis/1.0/net_revenue_paise/2026-08-01_2026-08-24``,
+    # with ``~UPI`` appended for a dimensioned row. A formula operand cites it
+    # verbatim, so it has to be the stored identity rather than something a
+    # join reconstructs.
+    Column("id", Text, nullable=False),
     Column("tool_name", Text, nullable=False),
     Column("tool_version", Text, nullable=False),
     Column("metric_id", Text, nullable=False),
     Column("unit", Text, nullable=False),
     Column("value_json", JSONB, nullable=False),
-    Column("formula_json", JSONB, nullable=True),
-    Column("inputs_json", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    # Part of the identity, not decoration: a revenue analysis publishes
+    # ``net_revenue_paise`` for two windows, and two rows with no way to tell
+    # them apart is how a prior-period number gets cited as a current one.
+    Column("period_from", Date, nullable=False),
+    Column("period_to", Date, nullable=False),
+    Column("dimension_value", Text, nullable=True),
+    Column("formula_json", _NULLABLE_JSONB, nullable=True),
+    Column("aggregation_json", _NULLABLE_JSONB, nullable=True),
+    Column("inputs_json", JSONB, nullable=False, server_default=text("'{}'::jsonb")),
     Column("source_record_ids", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
     Column("rules_applied", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
     Column("verification_checks", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=_NOW),
+    PrimaryKeyConstraint("execution_id", "id", name="pk_evidence"),
     # Metric ids carry mandatory unit suffixes (D-14).
     CheckConstraint("unit IN ('paise', 'ratio', 'pp', 'count')", name="ck_evidence_unit_valid"),
-    UniqueConstraint("execution_id", "metric_id", name="uq_evidence_execution_metric"),
+    # A derived metric declares arithmetic; a leaf declares the fold it came
+    # from. Never both, never neither -- a row with both has two accounts of
+    # where its number came from, and a row with neither cannot be verified at
+    # all (D-29).
+    CheckConstraint(
+        "(formula_json IS NULL) <> (aggregation_json IS NULL)",
+        name="ck_evidence_exactly_one_support",
+    ),
+    CheckConstraint("period_from < period_to", name="ck_evidence_period_half_open"),
+    Index("ix_evidence_execution_metric", "execution_id", "metric_id"),
 )
 
 execution_events = Table(

@@ -209,6 +209,7 @@ def reversal_rows(
             "amount_paise",
             naming.table,
             reversed_by,
+            "PARENT_ATTEMPT_DATE",
             entry_sources.movement_ids,
         ),
         publisher.tally(
@@ -217,6 +218,7 @@ def reversal_rows(
             entry.count,
             naming.table,
             reversed_by,
+            "PARENT_ATTEMPT_DATE",
             entry_sources.movement_ids,
         ),
         publisher.total(
@@ -226,6 +228,7 @@ def reversal_rows(
             "amount_paise",
             "transactions",
             captured,
+            "ATTEMPT_DATE",
             entry_sources.capture_transaction_ids,
         ),
         publisher.derived(
@@ -256,6 +259,7 @@ def reversal_rows(
                     "amount_paise",
                     naming.table,
                     f"{reversed_by}, with reason {reason.reason}",
+                    "PARENT_ATTEMPT_DATE",
                     movement_ids,
                     reason.reason,
                 ),
@@ -265,6 +269,7 @@ def reversal_rows(
                     reason.count,
                     naming.table,
                     f"{reversed_by}, with reason {reason.reason}",
+                    "PARENT_ATTEMPT_DATE",
                     movement_ids,
                     reason.reason,
                 ),

@@ -13,24 +13,35 @@ Ids are deterministic and self-describing:
 
 so an operand reference in a formula resolves to exactly one row, and a
 prior-period figure can never be mistaken for a current-period one. A metric
-measured over a dimension appends the slice: ``.../by_method.success_rate_ratio/
-2026-08-01_2026-08-24#UPI``.
+measured over a dimension appends the slice after a tilde:
+``.../by_method.success_rate_ratio/2026-08-01_2026-08-24~UPI``.
+
+The tilde is not decoration. An evidence id is the last segment of
+``GET /executions/{id}/evidence/{evidence_id}``, and ``#`` is the fragment
+delimiter -- a browser would never send the slice to the server at all, so the
+request would silently resolve to the blended row instead of the UPI one and
+return a plausible wrong answer. ``~`` is unreserved in RFC 3986 and needs no
+encoding (D-42).
 """
 
 from decimal import Decimal
 from typing import Literal
 
-from evidence.models import Aggregation, Evidence, Formula
+from evidence.models import Aggregation, Anchor, Evidence, Formula
 from evidence.vocabulary import unit_for
 
 from .base import Period
 
-__all__ = ["EvidencePublisher"]
+__all__ = ["SLICE", "EvidencePublisher"]
 
 #: Where an operand is a metric another tool owns rather than a row this tool
 #: published. Written as ``<tool>.<metric_id>`` so the reference is readable and
 #: the provenance walker can tell it apart from an evidence id.
 CROSS_TOOL = "{tool}.{metric_id}"
+
+#: Separates a dimensioned row's slice from the rest of its id. Unreserved in
+#: RFC 3986, because the id travels in a URL path (D-42).
+SLICE = "~"
 
 
 class EvidencePublisher:
@@ -44,7 +55,7 @@ class EvidencePublisher:
 
     def identifier(self, metric_id: str, period: Period, dimension_value: str | None = None) -> str:
         base = f"{self.tool}/{self.version}/{metric_id}/{period.from_}_{period.to}"
-        return f"{base}#{dimension_value}" if dimension_value is not None else base
+        return f"{base}{SLICE}{dimension_value}" if dimension_value is not None else base
 
     def _row(
         self,
@@ -88,6 +99,7 @@ class EvidencePublisher:
         field_name: str,
         over: str,
         predicate: str,
+        scoped_by: Anchor,
         record_ids: list[str],
         dimension_value: str | None = None,
     ) -> Evidence:
@@ -108,6 +120,7 @@ class EvidencePublisher:
                 over=over,
                 predicate=predicate,
                 unit=unit_for(metric_id),
+                scoped_by=scoped_by,
             ),
             inputs={"record_count": len(record_ids)},
             source_record_ids=record_ids,
@@ -123,6 +136,7 @@ class EvidencePublisher:
         field_name: str,
         over: str,
         predicate: str,
+        scoped_by: Anchor,
         record_ids: list[str],
         dimension_value: str | None = None,
     ) -> Evidence:
@@ -135,6 +149,7 @@ class EvidencePublisher:
             field_name=field_name,
             over=over,
             predicate=predicate,
+            scoped_by=scoped_by,
             record_ids=record_ids,
             dimension_value=dimension_value,
         )
@@ -146,6 +161,7 @@ class EvidencePublisher:
         value: int,
         over: str,
         predicate: str,
+        scoped_by: Anchor,
         record_ids: list[str],
         dimension_value: str | None = None,
     ) -> Evidence:
@@ -158,6 +174,7 @@ class EvidencePublisher:
             field_name="id",
             over=over,
             predicate=predicate,
+            scoped_by=scoped_by,
             record_ids=record_ids,
             dimension_value=dimension_value,
         )
@@ -171,17 +188,21 @@ class EvidencePublisher:
         operands: dict[str, str],
         inputs: dict[str, int | Decimal],
         rules: list[str],
-        source_record_ids: list[str] | None = None,
         dimension_value: str | None = None,
     ) -> Evidence:
-        """A metric computed from other metrics, stated in the formula grammar."""
+        """A metric computed from other metrics, stated in the formula grammar.
+
+        It cites no source records, and cannot: its provenance runs through its
+        operands, each of which resolves to another row that either cites
+        records or has operands of its own (D-40).
+        """
         return self._row(
             metric_id,
             period,
             value,
             formula=Formula(expression=expression, operands=operands, unit=unit_for(metric_id)),
             inputs=inputs,
-            source_record_ids=source_record_ids or [],
+            source_record_ids=[],
             rules=rules,
             dimension_value=dimension_value,
         )

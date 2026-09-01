@@ -372,10 +372,13 @@ class _EvidenceBuilder(EvidencePublisher):
             "because a failure has no capture instant"
         )
         captured = f"{attempted}, and status = CAPTURED"
-        reversal = (
-            "tied to a capture in the window; a refund belongs to the period of the payment "
-            "it reverses, not the period it was raised in (D-31)"
-        )
+
+        def reversal(noun: str) -> str:
+            return (
+                f"{noun}s tied to a capture in the window; a {noun} belongs to the period of "
+                "the payment it reverses, not the period it was raised in (D-31)"
+            )
+
         return [
             self.total(
                 "attempted_value_paise",
@@ -384,6 +387,7 @@ class _EvidenceBuilder(EvidencePublisher):
                 "amount_paise",
                 "transactions",
                 attempted,
+                "ATTEMPT_DATE",
                 sources.attempt_transaction_ids,
             ),
             self.total(
@@ -393,6 +397,7 @@ class _EvidenceBuilder(EvidencePublisher):
                 "amount_paise",
                 "transactions",
                 captured,
+                "ATTEMPT_DATE",
                 sources.capture_transaction_ids,
             ),
             self.total(
@@ -402,6 +407,7 @@ class _EvidenceBuilder(EvidencePublisher):
                 "fee_paise",
                 "transactions",
                 captured + "; the fee follows the instrument, not a flat rate (D-24)",
+                "ATTEMPT_DATE",
                 sources.capture_transaction_ids,
             ),
             self.total(
@@ -410,7 +416,8 @@ class _EvidenceBuilder(EvidencePublisher):
                 bridge.refunds_paise,
                 "amount_paise",
                 "refunds",
-                reversal,
+                reversal("refund"),
+                "PARENT_ATTEMPT_DATE",
                 sources.refund_ids,
             ),
             self.total(
@@ -419,7 +426,8 @@ class _EvidenceBuilder(EvidencePublisher):
                 bridge.chargebacks_paise,
                 "amount_paise",
                 "chargebacks",
-                reversal,
+                reversal("chargeback"),
+                "PARENT_ATTEMPT_DATE",
                 sources.chargeback_ids,
             ),
             self.derived(

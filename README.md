@@ -48,7 +48,7 @@ before anything non-deterministic touches it.
  2  Reconciliation      matcher, exceptions, invariants             [DONE]
  3  Tool framework      the contract + revenue analysis            [DONE]
  4  Remaining tools     failure, refund, chargeback                [DONE]
- 5  Trust layer         verification, evidence, provenance
+ 5  Trust layer         verification, evidence, provenance          [DONE]
 ------------------------------------------------------------------  first LLM call
  6  Agent runtime       intent, plan, validate, execute, state
  7  Explainer           grounding, template fallback
@@ -173,6 +173,7 @@ image, which is why "works on my machine" and "passes CI" are not separate claim
 | `task.py reconcile` | reconcile the golden window and persist the run |
 | `task.py revenue` | the golden revenue bridge, through both v1 tools |
 | `task.py diagnose` | every v1 tool, plus the cross-tool equivalences |
+| `task.py verify` | the same, through the five verification layers, then the provenance walk |
 | `task.py test` | pytest, 100% branch coverage required on `runtime/` |
 | `task.py dbtest` | row-level security, against a real Postgres |
 | `task.py dev` / `web` / `psql` | containers, foreground |
@@ -181,9 +182,9 @@ image, which is why "works on my machine" and "passes CI" are not separate claim
 
 ## Status
 
-**Phases 0 through 4 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
-contracts, the no-float guard, the ten fixture assertions, and 266 tests with 100% branch
-coverage on `runtime/`. A further 73 integration tests run against a real Postgres.
+**Phases 0 through 5 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
+contracts, the no-float guard, the ten fixture assertions, and 304 tests with 100% branch
+coverage on `runtime/`. A further 88 integration tests run against a real Postgres.
 
 The three boundary mechanisms exist before any domain logic does, which is the point of the phase:
 
@@ -330,8 +331,100 @@ function, and all four take the reconciliation `run_id` — which the spec asked
 revenue, making its own consistency requirement unsatisfiable
 ([D-35](docs/decisions.md#d-35--the-three-analysis-tools-take-a-run_id-which-the-spec-did-not-ask-for)).
 
-**Next: Phase 5 — the trust layer.** The five verification layers in order, cross-tool consistency
-enforced rather than tested, and the evidence and provenance builders.
+Phase 5 turned all of that from something the tools assert about themselves into something a
+separate layer re-derives.
+
+### Nothing is believed, including the tool that just checked itself
+
+```text
+  ok   TYPE         133 checks
+  ok   RANGE        161 checks
+  ok   CONSISTENCY   10 checks
+  ok   FORMULA      189 checks
+  ok   SOURCE       225 checks
+
+status      EXPLAINING
+```
+
+Five layers, in order, and a layer runs only if every layer before it passed. That is not an
+optimisation: a formula re-evaluated against operands that failed their range check produces a
+number nobody should read, and reporting it beside a range failure invites someone to pick
+whichever they prefer.
+
+Layer 4 does not ask a tool what it computed. It reads the tool's own declared expression,
+re-evaluates it through the restricted interpreter — a grammar with no calls, so it cannot re-run
+the tool — and demands the same number. Change `net_revenue_paise` by **one paise** and every other
+check in the system still passes: the operands each still agree with the row they cite, the bridge
+identity in the tool's own `verify()` is untouched, and only the re-evaluation notices.
+
+Layer 5 is where a leaf is checked, because a leaf has no arithmetic. `gross_payments_paise` is
+re-summed from the 341 records it names, straight out of the table, and must land on the published
+figure.
+
+### "Inside the period" is four questions, not one
+
+Layer 5 has to know *which date* selects a record, and there is no single answer:
+
+```text
+ATTEMPT_DATE          a payment belongs to the window it was attempted in
+CAPTURE_DATE          the ledger is captures; a settlement is due against one
+PARENT_ATTEMPT_DATE   a refund belongs to the window of the payment it reverses
+VALUE_DATE            a settlement lands in the bank window, not the capture one
+```
+
+So the evidence declares the rule it used, and layer 5 checks *that* rule
+([D-37](docs/decisions.md#d-37--evidence-declares-the-date-rule-that-scoped-it)). A tool that
+declares one scoping and applies another is now caught — nothing else in the system would notice.
+Writing it down immediately found a real defect: `bank_count` was filed under the analysis window
+while citing 341 settlements with September value dates, and layer 5 refused it, correctly
+([D-39](docs/decisions.md#d-39--bank_count-is-filed-under-the-bank-window-not-the-analysis-window)).
+
+### A number walks down to the records
+
+```text
+net_revenue_change_ratio = -0.175956
+  (current - prior) / prior
+    net_revenue_paise = 39012295          gross - refunds - fees - chargebacks
+      gross_payments_paise = 40626000     -> 341 transactions
+      refunds_paise        =  1178200     -> 10 refunds
+      fees_paise           =   260805     -> 341 transactions
+      chargebacks_paise    =   174700     -> 3 chargebacks
+    net_revenue_paise = 47342482          (the July window, the same way down)
+
+reaches 775 source records
+```
+
+`provenance/builder.py` knows nothing about revenue. Every level is an `Evidence` row that either
+declares a formula — so its operands are references to more rows — or declares a fold, so it cites
+records and the walk stops. That is what lets the drawer be one recursive renderer instead of a
+component per metric, and it is why a derived row may no longer cite records directly: a node with
+both has two accounts of where its number came from and nothing keeps them in step
+([D-40](docs/decisions.md#d-40--a-derived-metric-cites-operands-a-leaf-cites-records-never-both)).
+
+A cycle is refused rather than truncated. A half-rendered provenance tree looks complete, which is
+worse than one that says the chain is broken.
+
+### BLOCKED is a row, and it carries nothing
+
+```text
+VERIFYING  -> BLOCKED      a layer failed; error_json names it; no prose, ever
+           -> EXPLAINING   every layer passed; the numbers may now be phrased
+```
+
+A blocked execution stores **no evidence at all**, and `GET /executions/{id}/evidence/{id}` answers
+409 naming the layer rather than 404. A stored row is something the API serves and the drawer
+walks; serving the support for a number that failed verification is exactly how an unverified
+figure reaches a reader *with a citation attached*
+([D-43](docs/decisions.md#d-43--a-blocked-execution-is-a-row-and-it-stores-no-evidence)).
+
+The evidence id is also the URL: `.../evidence/finance.revenue_analysis/1.0/net_revenue_change_ratio/2026-08-01_2026-08-24`.
+A dimensioned row appends its slice after a **tilde**, not a `#` — a fragment never reaches the
+server, so a request for the UPI rate would have silently returned the blended one
+([D-42](docs/decisions.md#d-42--the-evidence-ids-slice-separator-is--not-)).
+
+**Next: Phase 6 — the agent runtime, and the first LLM call in the project.** Intent parsing with a
+confidence threshold, the deterministic intent-to-DAG planner, eleven plan validation checks, and
+the nine-state machine over an append-only event log.
 
 ---
 

@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, field_serializer, model_validator
 
 from .vocabulary import Unit, UnknownMetricError, metric
 
-__all__ = ["Aggregation", "Evidence", "Formula", "Unit"]
+__all__ = ["Aggregation", "Anchor", "Evidence", "Formula", "Unit"]
 
 
 class Formula(BaseModel):
@@ -42,12 +42,23 @@ class Formula(BaseModel):
     unit: Unit
 
 
+#: The date a record is selected by. Layer 5 of verification checks that every
+#: cited record falls inside the evidence row's period, and it cannot do that
+#: without knowing *which* date -- a refund raised in September against an
+#: August capture belongs to August (D-31), and a settlement for an August
+#: capture has a September value date (D-18). Both are correct, and a verifier
+#: that assumed one date for every record type would reject one of them (D-37).
+type Anchor = Literal["ATTEMPT_DATE", "CAPTURE_DATE", "PARENT_ATTEMPT_DATE", "VALUE_DATE"]
+
+
 class Aggregation(BaseModel):
     """A fold over the cited source records, for a metric with no arithmetic.
 
     ``predicate`` is the record set in words, and is what a reviewer reads to
-    decide whether the right rows were counted. ``source_record_ids`` on the
-    evidence is what the verifier re-sums.
+    decide whether the right rows were counted. ``scoped_by`` is the same claim
+    made machine-readably, so the verifier checks the scoping the tool declared
+    rather than a scoping it assumed. ``source_record_ids`` on the evidence is
+    what the verifier re-folds.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -57,6 +68,7 @@ class Aggregation(BaseModel):
     over: str
     predicate: str
     unit: Unit
+    scoped_by: Anchor
 
 
 class Evidence(BaseModel):
@@ -101,6 +113,27 @@ class Evidence(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _records_belong_to_the_fold(self) -> Self:
+        """A derived metric cites operands; a leaf cites records. Never both.
+
+        A ``Formula`` row that also names source records has two accounts of
+        where its number came from, and nothing keeps them in step: the cited
+        set can drift from the sets its operands cite and every check still
+        passes. The walk down through the operands reaches the same records one
+        level lower, so the second list is not more provenance -- it is a second
+        version of it (D-40).
+        """
+        if self.formula is not None and self.source_record_ids:
+            raise ValueError(
+                f"evidence {self.id!r} is derived from a formula but also cites "
+                f"{len(self.source_record_ids)} source record(s); a derived metric's "
+                "provenance runs through its operands"
+            )
+        if self.aggregation is not None and not self.source_record_ids and self.value != 0:
+            raise ValueError(f"evidence {self.id!r} folds to {self.value} over no records at all")
+        return self
+
+    @model_validator(mode="after")
     def _metric_is_registered(self) -> Self:
         """The vocabulary decides what may be published (C-04).
 
@@ -138,6 +171,10 @@ class Evidence(BaseModel):
                     f"{self.dimension_value!r} is not a {registered.dimension}; "
                     f"{self.metric_id!r} admits {sorted(registered.values)}"
                 )
+        if not registered.signed and self.value < 0:
+            raise ValueError(
+                f"{self.metric_id!r} is not a signed metric, but {self.id!r} publishes {self.value}"
+            )
         return self
 
     @field_serializer("value")

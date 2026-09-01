@@ -389,6 +389,7 @@ def _blended_rows(
             side.attempt_count,
             "transactions",
             attempted,
+            "ATTEMPT_DATE",
             sources.attempt_transaction_ids,
         ),
         publisher.tally(
@@ -397,6 +398,7 @@ def _blended_rows(
             side.succeeded_count,
             "transactions",
             succeeded,
+            "ATTEMPT_DATE",
             sources.succeeded_transaction_ids,
         ),
         publisher.total(
@@ -406,6 +408,7 @@ def _blended_rows(
             "amount_paise",
             "transactions",
             attempted,
+            "ATTEMPT_DATE",
             sources.attempt_transaction_ids,
         ),
         publisher.total(
@@ -415,6 +418,7 @@ def _blended_rows(
             "amount_paise",
             "transactions",
             succeeded,
+            "ATTEMPT_DATE",
             sources.succeeded_transaction_ids,
         ),
         publisher.derived(
@@ -503,6 +507,7 @@ def _rail_rows(
             entry.attempt_count,
             "transactions",
             predicate,
+            "ATTEMPT_DATE",
             attempts,
             rail,
         ),
@@ -512,6 +517,7 @@ def _rail_rows(
             entry.succeeded_count,
             "transactions",
             f"{predicate}, and status = CAPTURED",
+            "ATTEMPT_DATE",
             succeeded,
             rail,
         ),
@@ -522,6 +528,7 @@ def _rail_rows(
             "amount_paise",
             "transactions",
             predicate,
+            "ATTEMPT_DATE",
             attempts,
             rail,
         ),
@@ -532,6 +539,7 @@ def _rail_rows(
             "amount_paise",
             "transactions",
             f"{predicate}, and status = CAPTURED",
+            "ATTEMPT_DATE",
             succeeded,
             rail,
         ),

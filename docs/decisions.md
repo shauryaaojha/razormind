@@ -554,7 +554,7 @@ return the system to conventions.
 
 **Decision.** `by_method.success_rate_ratio` is a single registered metric carrying
 `dimension: "method"` and the four rails as its permitted values. Each evidence row names its
-slice in `dimension_value`, and the evidence id carries it (`.../2026-08-01_2026-08-24#UPI`).
+slice in `dimension_value`, and the evidence id carries it (`.../2026-08-01_2026-08-24~UPI`).
 
 The five `attribution.*_effect_paise` terms stay as five separate ids, deliberately.
 
@@ -626,3 +626,166 @@ reasons from narrative will still reach for the incident, and the arithmetic sti
 volume.
 
 **Cost to reverse.** Low, but it would mean reintroducing figures the data does not produce.
+
+---
+
+### D-37 — Evidence declares the date rule that scoped it
+
+**Decision.** `Aggregation` carries `scoped_by`, one of `ATTEMPT_DATE`, `CAPTURE_DATE`,
+`PARENT_ATTEMPT_DATE` or `VALUE_DATE`. Layer 5 resolves every cited record through that rule and
+checks the resulting date against the row's own period.
+
+**Why.** Layer 5 is written in the spec as "every `source_record_id` exists and is inside the
+period", which sounds like one check and is four. Three different scoping rules are in play, all
+three deliberate and all three already load-bearing:
+
+- a payment belongs to the window it was **attempted** in, because a failure has no capture
+  instant;
+- the reconciliation ledger is captures, scoped by **capture** date, because a settlement is due
+  against a capture;
+- a refund or chargeback belongs to the window of the payment it **reverses**
+  ([D-31](#d-31--a-refund-belongs-to-the-period-of-the-payment-it-reverses)), and this fixture has
+  one raised the following month;
+- a settlement line lands in the **bank** window, which is the capture window shifted by the
+  settlement cycle ([D-18](#d-18--a-reconciliation-run-scopes-its-two-sides-on-different-dates)).
+
+A verifier that assumed a single date for every record type would reject a correct row for three
+of those four. The alternative — inferring the rule from the table name — puts the scoping
+knowledge in the verifier, where it would silently drift from the tool that actually did the
+scoping.
+
+Declaring it makes layer 5 a check on the rule the tool *said* it used. A tool that declares
+`ATTEMPT_DATE` and scopes by capture date is now caught, which is a defect nothing else in the
+system would notice.
+
+**Cost to reverse.** Medium. Stored evidence carries the field.
+
+---
+
+### D-38 — The vocabulary declares which metrics may be negative
+
+**Decision.** `Metric` carries `signed: bool`. An unsigned metric published negative is refused by
+`Evidence` at construction and again by layer 2; an unsigned `_ratio` must additionally lie in
+`[0, 1]`.
+
+**Why.** [06-trust-layer.md](06-trust-layer.md#verification) states layer 2 as "refunds/fees/
+chargebacks >= 0; ratios in [0,1]; counts >= 0". Written as a blanket rule it is false twice over:
+`net_revenue_change_paise` is *supposed* to be negative in the golden window, and
+`net_revenue_change_ratio` is `-0.175956`. A single rule covering both cases has to be weakened
+until it checks nothing, and a layer that checks nothing passes on any input including a broken
+one.
+
+Declaring it per metric is what makes the layer real. A negative `gross_payments_paise` is now a
+caught defect and a negative attribution effect is not, which is the distinction that matters.
+
+**Cost to reverse.** Low.
+
+---
+
+### D-39 — `bank_count` is filed under the bank window, not the analysis window
+
+**Decision.** The `bank_count` evidence row carries `period_from`/`period_to` of the **settlement**
+window. Every other reconciliation row keeps the analysis window.
+
+**Why.** The two are different date ranges by design ([D-18](#d-18--a-reconciliation-run-scopes-its-two-sides-on-different-dates)):
+an August capture window matches settlements dated into September. The row was filed under August
+while citing 341 settlements with September value dates, and layer 5 refused it — correctly.
+
+The period is part of an evidence row's *identity*, not a label on it. This row measures the bank
+window, so that is the window it is identified by. Relaxing layer 5 to let this one row through
+would have been the other option, and it would have removed the check that catches a genuine
+period error everywhere else.
+
+**Cost to reverse.** Low.
+
+---
+
+### D-40 — A derived metric cites operands; a leaf cites records; never both
+
+**Decision.** `Evidence` refuses a row that carries a `Formula` and a non-empty
+`source_record_ids`. `EvidencePublisher.derived()` no longer takes the argument. A row with an
+`Aggregation` and a non-zero value must cite at least one record.
+
+**Why.** `clean_match_rate_ratio` used to do both: it declared `clean / ledger` *and* listed the
+327 clean transaction ids. Nothing keeps the two in step. The cited set can drift from the sets its
+operands cite, and every check still passes, because no layer compares them.
+
+It is also not more provenance. The walk down through `matched_clean_count` reaches those same 327
+ids one level lower, with the fold that produced them attached. The second list is a second version
+of the same fact, and the version a reader sees depends on which one the drawer happens to render.
+
+The zero case is deliberately still legal: a window with no refunds folds to `0` over no records,
+and that is a true statement rather than missing support.
+
+**Cost to reverse.** Low. Stored evidence would carry the old shape.
+
+---
+
+### D-41 — A leaf's re-fold is layer 5's work, not layer 4's
+
+**Decision.** Layer 4 re-evaluates every `Formula` and checks that a `COUNT` equals the size of the
+set it cites. Layer 5 additionally re-sums the declared column over the resolved records and demands
+the published figure.
+
+**Why.** [06-trust-layer.md](06-trust-layer.md#evidence) already promised the re-sum — "verification
+re-sums the ids it cites, which is an independent computation" — but the layer list puts
+recomputation in layer 4, and layer 4 cannot reach a database. `gross_payments_paise` has no
+expression to re-evaluate; the only check with any content is summing `amount_paise` over the 341
+records it names, and that requires the records.
+
+So the re-fold sits where the records are. Layer 4 keeps what it can do without them, which for a
+leaf is exactly one identity: a count is the size of its own citation list. The ordering also makes
+each failure unambiguous — "the records do not exist" and "the records do not add up" are different
+findings and cannot be reported as the same one.
+
+**Cost to reverse.** Low.
+
+---
+
+### D-42 — The evidence id's slice separator is `~`, not `#`
+
+**Decision.** A dimensioned row's id is `.../2026-08-01_2026-08-24~UPI`.
+[D-34](#d-34--a-metric-measured-over-a-dimension-is-one-metric-with-a-slice-not-one-per-value)
+originally wrote it with `#`.
+
+**Why.** The id is the last segment of `GET /executions/{id}/evidence/{evidence_id}`, and `#` is the
+URI fragment delimiter — a client never sends it to the server. A request for the UPI row would have
+arrived as a request for the blended row and returned a plausible, wrong, verified number with a
+citation attached. That is the exact failure mode this whole layer exists to prevent, arriving
+through the URL rather than through the arithmetic.
+
+`~` is unreserved in RFC 3986, so it needs no encoding and survives a copied link.
+
+**Cost to reverse.** Low now, high once ids are stored anywhere outside this repo.
+
+---
+
+### D-43 — A blocked execution is a row, and it stores no evidence
+
+**Decision.** An execution is written as `VERIFYING` before verification runs. It becomes
+`EXPLAINING` if every layer passes and `BLOCKED` if one does not. A blocked execution stores the
+failing layer in `error_json` and **no evidence rows at all**. `response_source` stays `NULL`.
+
+The `evidence` table is re-keyed on `(execution_id, id)` where `id` is the metric's address —
+tool, version, metric, window and slice — rather than a UUID.
+
+**Why, for the row.** "We could not verify this, and layer FORMULA is why" is an answer. A missing
+record is indistinguishable from a request that never arrived, and Invariant 4 needs the difference
+to be visible.
+
+**Why, for storing nothing.** A stored evidence row is something the API serves and the drawer
+walks. Serving the support for a number that failed verification is precisely how an unverified
+figure reaches a reader *with a citation attached to it* — worse than no answer, because it looks
+checked.
+
+**Why `EXPLAINING` and not `COMPLETED`.** Phase 5 has no explainer. Writing `COMPLETED` would claim
+an answer exists when the only thing that exists is permission to write one.
+
+**Why re-key the table.** The original schema had a UUID key and `UNIQUE (execution_id, metric_id)`,
+both written before anything published evidence. One execution publishes `net_revenue_paise` for two
+windows and `by_method.success_rate_ratio` for four rails in each, so the constraint made the second
+row of every pair a unique-violation. And a formula operand cites the address verbatim, so a
+surrogate key gives it nothing to resolve against. The table also had no column for an
+`Aggregation` at all — every leaf's support would have been dropped on the way to storage.
+
+**Cost to reverse.** Medium. It is a migration, and stored ids are the addresses citations use.

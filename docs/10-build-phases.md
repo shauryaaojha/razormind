@@ -150,6 +150,21 @@ correct and provable before anything non-deterministic touches it.
 - Provenance from `net_revenue_change_ratio` walks down to real transaction ids
 - Verification failure produces `BLOCKED` and **zero** generated text
 
+All four hold, in `tests/test_verification_db.py`, against the real fixture. The mutations are
+applied to the *published evidence* rather than to a tool: patching `finance.revenue_analysis` to
+return a wrong figure would prove the patch worked, whereas what needs proving is that the verifier
+takes no tool's word for anything — including a tool whose own `verify()` passed.
+
+Layer 4's mutation is one paise on `net_revenue_paise`. Every operand still agrees with the row it
+cites, the bridge identity in the tool's own `verify()` still passed, and only the re-evaluation
+notices.
+
+Three things this phase changed that the earlier docs had wrong, each with a decision entry:
+`Aggregation` now declares which date scoped it ([D-37](decisions.md#d-37--evidence-declares-the-date-rule-that-scoped-it)),
+the vocabulary declares which metrics may be negative ([D-38](decisions.md#d-38--the-vocabulary-declares-which-metrics-may-be-negative)),
+and the `evidence` table is keyed on the metric's address rather than a surrogate id
+([D-43](decisions.md#d-43--a-blocked-execution-is-a-row-and-it-stores-no-evidence)).
+
 **Do not build yet.** Any LLM call. Seriously — the next phase is the first one.
 
 ---

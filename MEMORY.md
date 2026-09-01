@@ -115,9 +115,10 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 | 1 — Data plane & golden fixture | **Done**, then reworked to a market-calibrated pipeline (D-23…D-27). 13 tables + RLS, calibration layer, scenario, ground truth, 10 fixture assertions |
 | 2 — Reconciliation engine | **Done.** 5 rules, greedy one-to-one, shuffle test, per-instrument fee rule, 4 read endpoints |
 | 3 — Tool framework & revenue | **Done.** `DeterministicTool` ABC + registry, `finance.reconciliation`, `finance.revenue_analysis`, restricted formula interpreter |
-| 4 — Remaining tools | **Done.** `payments.failure_analysis`, `finance.refund_analysis`, `risk.chargeback_analysis`, metric vocabulary enforced at import. 266 + 73 tests |
-| 5 — Trust layer | next |
-| 6–12 | not started |
+| 4 — Remaining tools | **Done.** `payments.failure_analysis`, `finance.refund_analysis`, `risk.chargeback_analysis`, metric vocabulary enforced at import |
+| 5 — Trust layer | **Done.** Five verification layers, cross-tool consistency, evidence persistence, provenance walk, `GET /executions/{id}/evidence/{evidence_id}`. 304 + 88 tests |
+| 6 — Agent runtime | next. **The first LLM call in the project** |
+| 7–12 | not started |
 
 ### Notes from Phase 0 worth not rediscovering
 
@@ -268,3 +269,44 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 - `scripts/check_no_float.py` now blanks string literals and comments with `tokenize` before
   scanning. It was reading an evidence id in a docstring -- `.../net_revenue_paise/2026-08-01_...`
   -- as a division. A guard that cries wolf on documentation gets worked around rather than fixed.
+
+### Notes from Phase 5 worth not rediscovering
+
+- **"Inside the period" is four questions.** Attempt date, capture date, the *parent* payment's
+  attempt date, and the settlement value date are all correct for different records, so the
+  evidence declares which rule scoped it (`Aggregation.scoped_by`) and layer 5 checks *that*
+  rule. A verifier assuming one date rejects three correct rows out of four.
+  → [D-37](docs/decisions.md#d-37--evidence-declares-the-date-rule-that-scoped-it)
+- **Writing that down immediately found a defect**: `bank_count` was filed under the analysis
+  window while citing settlements dated into September. It now carries the bank window, because
+  the period is part of a row's identity.
+  → [D-39](docs/decisions.md#d-39--bank_count-is-filed-under-the-bank-window-not-the-analysis-window)
+- **Layer 2 needs `signed` on the metric.** "Money is non-negative" is false for an attribution
+  effect and "a ratio is in [0, 1]" is false for `net_revenue_change_ratio`; one blanket rule has
+  to be weakened until it checks nothing.
+  → [D-38](docs/decisions.md#d-38--the-vocabulary-declares-which-metrics-may-be-negative)
+- **A leaf's re-fold belongs to layer 5, not layer 4.** Layer 4 cannot reach a database, and
+  `gross_payments_paise` has no expression -- the only check with content is re-summing the
+  column over the records it cites.
+  → [D-41](docs/decisions.md#d-41--a-leafs-re-fold-is-layer-5s-work-not-layer-4s)
+- **A derived row may not cite records.** `clean_match_rate_ratio` used to do both; the two
+  accounts can drift and nothing compares them. The walk reaches the same ids one level lower.
+  → [D-40](docs/decisions.md#d-40--a-derived-metric-cites-operands-a-leaf-cites-records-never-both)
+- **The slice separator is `~`, not `#`.** The evidence id is the last path segment of an
+  endpoint, and a fragment never reaches the server: a request for the UPI row would have
+  returned the blended one, verified, with a citation.
+  → [D-42](docs/decisions.md#d-42--the-evidence-ids-slice-separator-is--not-)
+- **Nullable `JSONB` needs `none_as_null=True`.** SQLAlchemy otherwise stores Python `None` as
+  the JSON literal `null`, which is not SQL NULL -- so
+  `(formula_json IS NULL) <> (aggregation_json IS NULL)` failed on every row that satisfied it.
+- **The `evidence` table was keyed wrong from Phase 1**: a UUID id and `UNIQUE (execution_id,
+  metric_id)`, which forbids the two windows and four rails one execution publishes, and gives a
+  formula operand nothing to resolve against. Migration 0003 keys it on `(execution_id, id)`
+  where the id is the metric's address.
+  → [D-43](docs/decisions.md#d-43--a-blocked-execution-is-a-row-and-it-stores-no-evidence)
+- **Mutate the published evidence, not the tool.** Patching a tool to return a wrong figure
+  tests the patch. `tests/test_verification_db.py` rewrites one evidence row by one paise and
+  only layer 4 notices -- the tool's own `verify()` still passes.
+- **A blocked execution stores no evidence.** A stored row is one the API serves and the drawer
+  walks; serving support for an unverified number is worse than serving nothing, because it
+  looks checked.

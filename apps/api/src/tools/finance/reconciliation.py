@@ -21,7 +21,7 @@ from typing import Any, ClassVar, Literal
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from evidence.models import Aggregation, Evidence, Formula
+from evidence.models import Aggregation, Anchor, Evidence, Formula
 from reconciliation.engine import EmptyPeriodError, reconcile
 from reconciliation.models import ReconciliationResult
 from reconciliation.repository import (
@@ -367,12 +367,14 @@ class ReconciliationTool(DeterministicTool[ReconciliationInput, ReconciliationOu
     def evidence(
         self, inp: ReconciliationInput, out: ReconciliationOutput, ctx: ToolContext
     ) -> list[Evidence]:
-        window = f"{out.period.from_.isoformat()}_{out.period.to.isoformat()}"
-
-        def identifier(metric_id: str) -> str:
-            return f"{self.name}/{self.version}/{metric_id}/{window}"
-
         checked = list(self.verify(inp, out).checks)
+
+        def identifier(metric_id: str, period: Period | None = None) -> str:
+            window = period or out.period
+            return (
+                f"{self.name}/{self.version}/{metric_id}/"
+                f"{window.from_.isoformat()}_{window.to.isoformat()}"
+            )
 
         def counted(
             metric_id: str,
@@ -380,9 +382,11 @@ class ReconciliationTool(DeterministicTool[ReconciliationInput, ReconciliationOu
             record_ids: list[str],
             over: str,
             predicate: str,
+            scoped_by: Anchor,
             operation: Literal["SUM", "COUNT"] = "COUNT",
             field_name: str = "id",
             unit: Literal["paise", "count"] = "count",
+            period: Period | None = None,
         ) -> Evidence:
             """A leaf metric: a fold over the records it cites, with no arithmetic.
 
@@ -391,22 +395,24 @@ class ReconciliationTool(DeterministicTool[ReconciliationInput, ReconciliationOu
             cited ids instead. Handing it a synthetic formula would make
             layer 4 a check that passes by construction.
             """
+            window = period or out.period
             return Evidence(
-                id=identifier(metric_id),
+                id=identifier(metric_id, window),
                 execution_id=ctx.execution_id,
                 tool_name=self.name,
                 tool_version=self.version,
                 metric_id=metric_id,
                 unit=unit,
                 value=value,
-                period_from=out.period.from_.isoformat(),
-                period_to=out.period.to.isoformat(),
+                period_from=window.from_.isoformat(),
+                period_to=window.to.isoformat(),
                 aggregation=Aggregation(
                     operation=operation,
                     field_name=field_name,
                     over=over,
                     predicate=predicate,
                     unit=unit,
+                    scoped_by=scoped_by,
                 ),
                 inputs={"record_count": len(record_ids)},
                 source_record_ids=record_ids,
@@ -429,13 +435,21 @@ class ReconciliationTool(DeterministicTool[ReconciliationInput, ReconciliationOu
                 out.sources.ledger_transaction_ids,
                 "transactions",
                 ledger_predicate,
+                "CAPTURE_DATE",
             ),
+            # Filed under the **bank** window, not the analysis window. The two
+            # are different date ranges (D-18), and a row whose period says
+            # August while every record it cites has a September value date
+            # cannot survive layer 5 -- nor should it: the period is the row's
+            # identity, and this row measures the settlement window (D-39).
             counted(
                 "bank_count",
                 out.bank_count,
                 out.sources.bank_settlement_ids,
                 "settlements",
                 bank_predicate,
+                "VALUE_DATE",
+                period=out.bank_period,
             ),
             counted(
                 "matched_pairs_count",
@@ -443,6 +457,7 @@ class ReconciliationTool(DeterministicTool[ReconciliationInput, ReconciliationOu
                 out.sources.matched_transaction_ids,
                 "reconciliation_matches",
                 "one-to-one pairs admitted by rules 1-4 at confidence >= 0.85",
+                "CAPTURE_DATE",
             ),
             counted(
                 "matched_clean_count",
@@ -450,6 +465,7 @@ class ReconciliationTool(DeterministicTool[ReconciliationInput, ReconciliationOu
                 out.sources.clean_transaction_ids,
                 "reconciliation_matches",
                 "matched pairs carrying no exception",
+                "CAPTURE_DATE",
             ),
             counted(
                 "exception_count",
@@ -458,6 +474,7 @@ class ReconciliationTool(DeterministicTool[ReconciliationInput, ReconciliationOu
                 "reconciliation_exceptions",
                 "ledger-side exceptions only; bank-side rows are reported separately "
                 "so one discrepancy is not counted twice (D-20)",
+                "CAPTURE_DATE",
             ),
             counted(
                 "unresolved_exception_value_paise",
@@ -465,6 +482,7 @@ class ReconciliationTool(DeterministicTool[ReconciliationInput, ReconciliationOu
                 out.sources.unresolved_transaction_ids,
                 "reconciliation_exceptions",
                 "NO_COUNTERPART on the ledger side; a confidence band, never a bridge term",
+                "CAPTURE_DATE",
                 operation="SUM",
                 field_name="amount_paise",
                 unit="paise",
@@ -488,7 +506,8 @@ class ReconciliationTool(DeterministicTool[ReconciliationInput, ReconciliationOu
                     unit="ratio",
                 ),
                 inputs={"clean": out.matched_clean_count, "ledger": out.ledger_count},
-                source_record_ids=out.sources.clean_transaction_ids,
+                # No source records: a derived row's provenance runs through
+                # its operands, and both of them cite the ledger rows (D-40).
                 rules_applied=["clean match rate = matched_clean / ledger_count (D-20)"],
                 verification_checks=["clean_match_rate_is_what_it_claims"],
             ),

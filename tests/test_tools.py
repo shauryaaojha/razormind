@@ -84,8 +84,13 @@ class CountingTool(DeterministicTool[ToolInput, CountingOutput]):
                     over="nothing",
                     predicate="none",
                     unit="count",
+                    scoped_by="ATTEMPT_DATE",
                 ),
-                inputs={"record_count": 0},
+                inputs={"record_count": out.exception_count},
+                # A non-zero fold has to cite the records it folded over: a
+                # count of two supported by nothing is unverifiable, and the
+                # rule applies to a test double like anything else.
+                source_record_ids=[f"TXN_{n}" for n in range(out.exception_count)],
             )
         ]
 
@@ -206,7 +211,12 @@ class TestEvidence:
                 period_to="2026-08-24",
                 formula=Formula(expression="a", operands={"a": "literal"}, unit="paise"),
                 aggregation=Aggregation(
-                    operation="SUM", field_name="a", over="b", predicate="c", unit="paise"
+                    operation="SUM",
+                    field_name="a",
+                    over="b",
+                    predicate="c",
+                    unit="paise",
+                    scoped_by="ATTEMPT_DATE",
                 ),
             )
 
@@ -443,7 +453,13 @@ def _evidence(
         period_from="2026-08-01",
         period_to="2026-08-24",
         dimension_value=dimension_value,
+        source_record_ids=["TXN_1"],
         aggregation=Aggregation(
-            operation="COUNT", field_name="id", over="t", predicate="p", unit="count"
+            operation="COUNT",
+            field_name="id",
+            over="t",
+            predicate="p",
+            unit="count",
+            scoped_by="ATTEMPT_DATE",
         ),
     )

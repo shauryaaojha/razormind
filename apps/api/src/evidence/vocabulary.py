@@ -70,10 +70,23 @@ class Metric:
     description: str
     dimension: str | None = None
     values: frozenset[str] | None = None
+    #: Whether the metric may be negative. Layer 2 of verification (RANGE)
+    #: is worth nothing without it: "a ratio is in [0, 1]" is false for
+    #: ``net_revenue_change_ratio`` and "money is non-negative" is false for
+    #: an attribution effect, so a single blanket rule would have to be
+    #: relaxed to the point of checking nothing. Declaring it per metric is
+    #: what makes a negative ``gross_payments_paise`` a caught defect
+    #: (D-38).
+    signed: bool = False
 
     @property
     def unit(self) -> Unit:
         return unit_for(self.id)
+
+    @property
+    def bounded(self) -> bool:
+        """Whether the value must lie in [0, 1]. Only unsigned ratios are."""
+        return self.unit == "ratio" and not self.signed
 
 
 def unit_for(metric_id: str) -> Unit:
@@ -128,22 +141,46 @@ METRICS: Mapping[str, Metric] = _register(
     Metric("fees_paise", "Fees on captures, per instrument (D-24)."),
     Metric("chargebacks_paise", "Chargebacks against captures in the window."),
     Metric("net_revenue_paise", "gross - refunds - fees - chargebacks."),
-    Metric("net_revenue_change_paise", "Net revenue, current minus comparison period."),
-    Metric("net_revenue_change_ratio", "That change as a proportion of the comparison period."),
-    Metric("rounding_residual_paise", "The attribution plug. Bounded by the term count."),
+    Metric(
+        "net_revenue_change_paise",
+        "Net revenue, current minus comparison period.",
+        signed=True,
+    ),
+    Metric(
+        "net_revenue_change_ratio",
+        "That change as a proportion of the comparison period.",
+        signed=True,
+    ),
+    Metric(
+        "rounding_residual_paise",
+        "The attribution plug. Bounded by the term count.",
+        signed=True,
+    ),
     Metric("confidence_band_ratio", "Unresolved exception value over net revenue."),
-    Metric("attribution.attempt_volume_effect_paise", "Volume effect on gross."),
-    Metric("attribution.success_rate_effect_paise", "Rate effect on gross, as the remainder."),
-    Metric("attribution.refunds_effect_paise", "Change in refunds, negated."),
-    Metric("attribution.fees_effect_paise", "Change in fees, negated."),
-    Metric("attribution.chargebacks_effect_paise", "Change in chargebacks, negated."),
+    Metric("attribution.attempt_volume_effect_paise", "Volume effect on gross.", signed=True),
+    Metric(
+        "attribution.success_rate_effect_paise",
+        "Rate effect on gross, as the remainder.",
+        signed=True,
+    ),
+    Metric("attribution.refunds_effect_paise", "Change in refunds, negated.", signed=True),
+    Metric("attribution.fees_effect_paise", "Change in fees, negated.", signed=True),
+    Metric(
+        "attribution.chargebacks_effect_paise",
+        "Change in chargebacks, negated.",
+        signed=True,
+    ),
     # ------------------------------------------------------- failure analysis
     Metric("attempt_count", "Payment attempts in the window."),
     Metric("succeeded_count", "Attempts that were captured."),
     Metric("succeeded_value_paise", "Value of attempts that were captured."),
     Metric("failed_value_paise", "Value of attempts that were not captured."),
     Metric("success_rate_ratio", "succeeded_count / attempt_count, blended across rails."),
-    Metric("success_rate_pp_change", "Blended success rate, in percentage points."),
+    Metric(
+        "success_rate_pp_change",
+        "Blended success rate, in percentage points.",
+        signed=True,
+    ),
     Metric("technical_decline_ratio", "Attempts failing on a bank or NPCI back end."),
     Metric("business_decline_ratio", "Attempts declined for funds, PIN, or limits."),
     Metric("by_method.attempt_count", "Attempts on one rail.", "method", METHODS),
@@ -161,6 +198,7 @@ METRICS: Mapping[str, Metric] = _register(
         "One rail's success rate change, in percentage points.",
         "method",
         METHODS,
+        signed=True,
     ),
     # --------------------------------------------------------------- refunds
     Metric("refund_value_paise", "Refund value. Equal to the bridge's refunds_paise."),
@@ -168,7 +206,11 @@ METRICS: Mapping[str, Metric] = _register(
     Metric(
         "refund_rate_ratio", "Refund value over gross payments. A value rate, not a count rate."
     ),
-    Metric("refund_value_change_paise", "Refund value, current minus comparison period."),
+    Metric(
+        "refund_value_change_paise",
+        "Refund value, current minus comparison period.",
+        signed=True,
+    ),
     Metric("by_reason.refund_value_paise", "Refund value for one reason.", "reason"),
     Metric("by_reason.refund_count", "Refunds for one reason.", "reason"),
     # ------------------------------------------------------------ chargebacks
@@ -179,7 +221,11 @@ METRICS: Mapping[str, Metric] = _register(
         "Chargeback value over gross payments. A value rate; the card networks' count-based "
         "ratio is a different quantity and is deliberately not published under this name.",
     ),
-    Metric("chargeback_value_change_paise", "Chargeback value, current minus comparison period."),
+    Metric(
+        "chargeback_value_change_paise",
+        "Chargeback value, current minus comparison period.",
+        signed=True,
+    ),
     Metric("by_reason.chargeback_value_paise", "Chargeback value for one reason.", "reason"),
     Metric("by_reason.chargeback_count", "Chargebacks for one reason.", "reason"),
 )
