@@ -36,7 +36,13 @@ from runtime.schema import agent_executions
 
 from .verifier import VerificationReport
 
-__all__ = ["StoredExecution", "finish_execution", "open_execution", "read_execution"]
+__all__ = [
+    "StoredExecution",
+    "finish_execution",
+    "open_execution",
+    "read_execution",
+    "record_verification",
+]
 
 
 @dataclass(frozen=True)
@@ -62,11 +68,17 @@ async def open_execution(
     execution_id: UUID,
     user_id: UUID,
     merchant_id: str,
-    period_from: date,
-    period_to: date,
     question: str,
+    period_from: date | None = None,
+    period_to: date | None = None,
 ) -> None:
-    """Record the execution before anything is verified."""
+    """Record the execution before anything is verified.
+
+    The period is optional because an agent execution does not have one yet: it
+    is written when planning resolves the intent. A placeholder window would be
+    a date range nobody asked for, sitting in the audit row for every execution
+    that never got as far as choosing one.
+    """
     await conn.execute(
         agent_executions.insert().values(
             id=execution_id,
@@ -80,32 +92,47 @@ async def open_execution(
     )
 
 
+async def record_verification(
+    conn: AsyncConnection,
+    execution_id: UUID,
+    report: VerificationReport,
+    rows: tuple[Evidence, ...],
+) -> tuple[str, dict[str, Any] | None]:
+    """Store the evidence a passing report earns, and say what state follows.
+
+    A blocked execution stores **no evidence**. That is not tidiness: a stored
+    row is something the API will serve and the provenance drawer will walk, and
+    serving the support for a number that failed verification is how an
+    unverified figure reaches a reader with a citation attached to it.
+
+    It writes no status of its own, because two things move an execution between
+    states -- this and the orchestrator's state machine -- and only one of them
+    may own the column. Returning the verdict instead of writing it is what
+    keeps the state machine the single writer.
+    """
+    if report.passed:
+        await save_evidence(conn, execution_id, rows)
+        return report.status, None
+    return report.status, {
+        "code": "VERIFICATION_FAILED",
+        "message": f"verification stopped at layer {report.blocked_at}",
+        "detail": {"blocked_at": report.blocked_at, "failures": list(report.failures)},
+    }
+
+
 async def finish_execution(
     conn: AsyncConnection,
     execution_id: UUID,
     report: VerificationReport,
     rows: tuple[Evidence, ...],
 ) -> str:
-    """Write the verdict, and the evidence only if there is a verdict to support.
+    """:func:`record_verification`, plus the status write, for a standalone run.
 
-    A blocked execution stores **no evidence**. That is not tidiness: a stored
-    row is something the API will serve and the provenance drawer will walk, and
-    serving the support for a number that failed verification is how an
-    unverified figure reaches a reader with a citation attached to it.
+    Used by ``scripts/verify.py``, which exercises the trust layer with no
+    planner and no state machine above it. Inside an agent execution the
+    orchestrator does the status write itself.
     """
-    status = report.status
-    error = (
-        None
-        if report.passed
-        else {
-            "code": "VERIFICATION_FAILED",
-            "message": f"verification stopped at layer {report.blocked_at}",
-            "detail": {"blocked_at": report.blocked_at, "failures": list(report.failures)},
-        }
-    )
-    if report.passed:
-        await save_evidence(conn, execution_id, rows)
-
+    status, error = await record_verification(conn, execution_id, report, rows)
     await conn.execute(
         update(agent_executions)
         .where(agent_executions.c.id == execution_id)

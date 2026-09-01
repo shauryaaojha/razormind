@@ -50,7 +50,7 @@ before anything non-deterministic touches it.
  4  Remaining tools     failure, refund, chargeback                [DONE]
  5  Trust layer         verification, evidence, provenance          [DONE]
 ------------------------------------------------------------------  first LLM call
- 6  Agent runtime       intent, plan, validate, execute, state
+ 6  Agent runtime       intent, plan, validate, execute, state    [DONE]
  7  Explainer           grounding, template fallback
  8  API surface         SSE streaming, OpenAPI contract
  9  Web application     chat, dashboard, exceptions, provenance
@@ -174,6 +174,7 @@ image, which is why "works on my machine" and "passes CI" are not separate claim
 | `task.py revenue` | the golden revenue bridge, through both v1 tools |
 | `task.py diagnose` | every v1 tool, plus the cross-tool equivalences |
 | `task.py verify` | the same, through the five verification layers, then the provenance walk |
+| `task.py ask "..."` | one question through the whole runtime; `--canned <intent>` needs no key |
 | `task.py test` | pytest, 100% branch coverage required on `runtime/` |
 | `task.py dbtest` | row-level security, against a real Postgres |
 | `task.py dev` / `web` / `psql` | containers, foreground |
@@ -182,9 +183,9 @@ image, which is why "works on my machine" and "passes CI" are not separate claim
 
 ## Status
 
-**Phases 0 through 5 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
-contracts, the no-float guard, the ten fixture assertions, and 304 tests with 100% branch
-coverage on `runtime/`. A further 88 integration tests run against a real Postgres.
+**Phases 0 through 6 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
+contracts, the no-float guard, the ten fixture assertions, and 359 tests with 100% branch
+coverage on `runtime/`. A further 104 integration tests run against a real Postgres.
 
 The three boundary mechanisms exist before any domain logic does, which is the point of the phase:
 
@@ -422,9 +423,106 @@ A dimensioned row appends its slice after a **tilde**, not a `#` — a fragment 
 server, so a request for the UPI rate would have silently returned the blended one
 ([D-42](docs/decisions.md#d-42--the-evidence-ids-slice-separator-is--not-)).
 
-**Next: Phase 6 — the agent runtime, and the first LLM call in the project.** Intent parsing with a
-confidence threshold, the deterministic intent-to-DAG planner, eleven plan validation checks, and
-the nine-state machine over an append-only event log.
+Phase 6 put a question in front of all of it. This is the first phase with a model in it, and
+the model's entire influence is one object: which analysis, over which two windows.
+
+### One question, all the way down
+
+```text
+$ python scripts/task.py ask "Why did net revenue fall in August?"
+
+INTENT
+  revenue_diagnosis  confidence 0.95
+  period      [2026-08-01, 2026-08-24)
+  comparison  [2026-07-01, 2026-07-24)
+
+PLAN
+  layer 0   finance.reconciliation
+  layer 1   risk.chargeback_analysis, payments.failure_analysis,
+            finance.refund_analysis, finance.revenue_analysis
+
+EXECUTION
+  ok   reconcile       1016 ms
+  ok   chargebacks      139 ms
+  ok   failures         173 ms
+  ok   refunds          190 ms
+  ok   revenue          215 ms
+
+VERIFICATION
+  ok   TYPE         133 checks
+  ok   RANGE        161 checks
+  ok   CONSISTENCY   10 checks
+  ok   FORMULA      189 checks
+  ok   SOURCE       225 checks
+
+status      EXPLAINING
+```
+
+Layer 1 finishes in about the time of its slowest node rather than the sum of all four. The
+planner expresses that — the analyses depend on reconciliation and on nothing else — and each node
+runs on its own connection, because an asyncpg connection cannot serve two queries at once and
+sharing one would quietly serialise the thing the layering exists for.
+
+`EXPLAINING` is where the phase stops, on purpose: the numbers are verified and nothing has phrased
+them. Writing `COMPLETED` here would claim an answer exists when the only thing that exists is
+permission to write one.
+
+### Asking is better than assuming
+
+Three of the ten seeded questions get a question back rather than an answer:
+
+```text
+"How did revenue change?"   -> Which period should I compare [2026-08-01, 2026-08-24) against?
+"Show me the numbers."      -> confidence 0.31, below the 0.75 gate
+"Is anything wrong?"        -> confidence 0.55
+```
+
+The gate is hard, not a heuristic. Guessing a comparison period is the single easiest way to
+produce a confidently wrong finance answer: "revenue is down 17.6%" against a window nobody chose
+is, in the output, indistinguishable from the same sentence against the right one.
+
+### Eleven gates, and nothing runs until they pass
+
+`REJECTED` is terminal *and nothing executed* — no reconciliation run, no evidence, no partial
+answer. Every check is evaluated rather than short-circuited, so fixing one problem does not reveal
+a second on resubmission.
+
+The spec listed ten. The eleventh is real and had to be added: every analysis tool takes the
+reconciliation `run_id`, which does not exist when the plan is written, so a plan carries typed
+input *references* — and a reference to a node this one does not depend on has to be caught before
+execution starts, not surfaced as a tool error deep in a running DAG
+([D-45](docs/decisions.md#d-45--the-eleventh-validation-gate-an-input-reference-must-name-a-dependency)).
+
+### No model is a supported state, not an outage
+
+With no `ANTHROPIC_API_KEY`, `get_provider()` returns a provider that refuses every call, and a run
+fails with `PROVIDER_UNAVAILABLE` rather than inventing an intent. That is the correct outcome and
+worth seeing once: a canned intent would answer a question nobody asked, verified and cited, with
+nothing anywhere indicating that no model was consulted.
+
+Losing the model at *explanation* time is a different case and degrades differently — Phase 7
+renders the verified metrics from a template. **Degrade the prose, never the numbers.**
+
+`task.py ask --canned revenue_diagnosis "..."` scripts the intent so the deterministic half can be
+run with no key and no spend. It prints `** NO MODEL WAS CONSULTED **` every time it does.
+
+### What the model is allowed to touch
+
+```text
+question ──▶ [ model ] ──▶ Intent ──▶ planner ──▶ validator ──▶ tools ──▶ verifier
+                             │                                    ▲
+                             └─ which analysis, which two windows ─┘
+                                nothing else crosses this line
+```
+
+The planner is deterministic: intent type maps to a fixed DAG. v2 lets a model *propose* a plan
+from `registry.describe()`, and `validation/plan_validator.py` does not change — an LLM-proposed
+plan passes the same eleven gates. That is what makes handing planning to a model a swap rather
+than a re-audit.
+
+**Next: Phase 7 — the explainer and grounding.** Prose that cannot contain an ungrounded number:
+claim extraction, five grounding checks including a byte-match against the verified metric,
+regenerate-once, then a deterministic template fallback.
 
 ---
 

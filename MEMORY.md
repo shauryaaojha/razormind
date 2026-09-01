@@ -117,8 +117,9 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 | 3 — Tool framework & revenue | **Done.** `DeterministicTool` ABC + registry, `finance.reconciliation`, `finance.revenue_analysis`, restricted formula interpreter |
 | 4 — Remaining tools | **Done.** `payments.failure_analysis`, `finance.refund_analysis`, `risk.chargeback_analysis`, metric vocabulary enforced at import |
 | 5 — Trust layer | **Done.** Five verification layers, cross-tool consistency, evidence persistence, provenance walk, `GET /executions/{id}/evidence/{evidence_id}`. 304 + 88 tests |
-| 6 — Agent runtime | next. **The first LLM call in the project** |
-| 7–12 | not started |
+| 6 — Agent runtime | **Done.** Intent parser + confidence gate, deterministic planner, eleven validation gates, concurrent DAG executor, nine-state machine, event log. 359 + 104 tests |
+| 7 — Explainer | next. Grounding, byte-match, template fallback |
+| 8–12 | not started |
 
 ### Notes from Phase 0 worth not rediscovering
 
@@ -310,3 +311,33 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 - **A blocked execution stores no evidence.** A stored row is one the API serves and the drawer
   walks; serving support for an unverified number is worse than serving nothing, because it
   looks checked.
+
+### Notes from Phase 6 worth not rediscovering
+
+- **`orchestrator` / `intent` / `validation` were siblings and could not stay that way** --
+  the same defect as D-28, found the same way. They are now ordered, and `ExecutionPlan` moved
+  into a `plan` package because the orchestrator builds one and the validator judges one.
+  → [D-44](docs/decisions.md#d-44--the-agent-plane-is-layered-and-the-execution-plan-is-its-own-package)
+- **The spec listed ten validation gates; the exit criterion asked for eleven.** The missing one
+  is real: a plan needs typed input *references* for the `run_id`, and a reference to a node
+  this one does not depend on must be caught before execution starts.
+  → [D-45](docs/decisions.md#d-45--the-eleventh-validation-gate-an-input-reference-must-name-a-dependency)
+- **Each DAG node opens its own connection.** An asyncpg connection cannot serve two queries at
+  once; sharing one would serialise the layer or corrupt the protocol state.
+- **The no-float guard's blanket check is now scoped to money-bearing packages.** A network
+  timeout and `time.monotonic()` are floats and are not money. The three money-specific checks
+  stay universal.
+  → [D-46](docs/decisions.md#d-46--the-blanket-float-ban-is-scoped-to-money-bearing-packages)
+- **Contract 3 is `allow_indirect_imports = True`, deliberately.** `llm/provider.py` is the one
+  module allowed to import the SDK and everything else reaches it *through* that, so a
+  transitive check would forbid the design. Contract 1 stays transitive and must.
+  → [D-47](docs/decisions.md#d-47--the-vendor-sdk-contract-checks-direct-imports-not-transitive-ones)
+- **The ten seeded questions run against a scripted provider.** That tests the parser, not the
+  model. Model accuracy is Phase 11's *score*, not a build gate.
+- **Concurrency is asserted with sleeping fakes**, not the real tools: timing the real four
+  would be timing Postgres.
+- **`get_provider()` returning a refusing provider is a supported state.** No key means
+  `PROVIDER_UNAVAILABLE`, never a canned intent -- an invented intent answers a question nobody
+  asked, verified and cited.
+- **`task.py` grew argument pass-through** for `ask`, checked before the unknown-target scan so
+  a question is not read as a list of targets.

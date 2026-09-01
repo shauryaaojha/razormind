@@ -13,8 +13,20 @@ worked around rather than fixed. Blanking is done by ``tokenize``, so it
 cannot be fooled by a quote inside a string.
 
 1. A field or annotation named ``*_paise`` typed as ``float``.
-2. ``float(`` or a ``float`` annotation anywhere in the API source.
+2. ``float(`` or a ``float`` annotation in a **money-bearing** package.
 3. ``round()`` or ``/`` on a ``_paise`` name outside ``runtime/money.py``.
+
+Check 2 is the blanket one, and it is scoped rather than universal. The agent
+plane -- the planner, the validator, the intent parser, the model boundary --
+computes no money and deals in seconds and monotonic clocks, which the standard
+library types as floats. Banning them there would mean either writing awkward
+code to dodge a guard or, far more likely, someone adding a broad exemption that
+also covers the packages the guard exists for. The scope matches what the
+message has always claimed.
+
+Checks 1, 3 and 4 stay universal, because they are about money specifically:
+a ``_paise`` field, a division on one, or a ``round()`` is a violation wherever
+it appears.
 
 Run: ``python scripts/check_no_float.py``
 """
@@ -31,6 +43,18 @@ SOURCE_ROOTS = [ROOT / "apps" / "api" / "src", ROOT / "data" / "seed"]
 # The single module permitted to round.
 ROUNDING_EXEMPT = {ROOT / "apps" / "api" / "src" / "runtime" / "money.py"}
 
+#: Packages where a money value is computed, rendered or stored. Check 2 -- the
+#: blanket float ban -- applies here and nowhere else.
+MONEY_BEARING = (
+    "runtime",
+    "reconciliation",
+    "tools",
+    "evidence",
+    "verification",
+    "provenance",
+    "routes",
+)
+
 PAISE_FLOAT = re.compile(r"\w*_paise\w*\s*:\s*float\b")
 FLOAT_ANNOTATION = re.compile(r":\s*float\b|->\s*float\b|\bfloat\(")
 PAISE_DIVISION = re.compile(r"\w*_paise\w*\s*/(?!/)")
@@ -42,6 +66,14 @@ CHECKS = (
     (PAISE_DIVISION, "division applied to a _paise value"),
     (ROUND_CALL, "round() outside runtime/money.py"),
 )
+
+
+def _carries_money(path: Path) -> bool:
+    """Whether the blanket float ban applies to this file."""
+    parts = path.parts
+    if "seed" in parts:
+        return True
+    return any(package in parts for package in MONEY_BEARING)
 
 
 def _iter_sources() -> list[Path]:
@@ -87,6 +119,7 @@ def scan() -> list[str]:
     violations: list[str] = []
     for path in _iter_sources():
         exempt = path in ROUNDING_EXEMPT
+        money = _carries_money(path)
         source = path.read_text(encoding="utf-8")
         raw = source.splitlines()
         for lineno, code in enumerate(_code_lines(source), start=1):
@@ -95,6 +128,8 @@ def scan() -> list[str]:
                 continue
             for pattern, message in CHECKS:
                 if exempt and pattern in (ROUND_CALL, FLOAT_ANNOTATION):
+                    continue
+                if pattern is FLOAT_ANNOTATION and not money:
                     continue
                 if pattern.search(code):
                     rel = path.relative_to(ROOT).as_posix()

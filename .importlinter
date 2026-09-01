@@ -15,6 +15,7 @@ root_packages =
     orchestrator
     intent
     validation
+    plan
     tools
     reconciliation
     runtime
@@ -52,9 +53,24 @@ type = layers
 # an Evidence graph, so both must import `evidence`, and siblings may not
 # import each other. Ordering them strictly is the honest shape -- `evidence`
 # is a vocabulary, and the two things that consume it sit above it (D-28).
+#
+# orchestrator / intent / validation were siblings for the same reason, and
+# break the same way now that they have contents: the planner reads an Intent
+# and the validator checks one, so both must import `intent`, and siblings may
+# not import each other. The honest order is the direction the pipeline runs --
+# the orchestrator drives validation, validation judges a plan, and the intent
+# parser is the only thing above the boundary that talks to a model.
+#
+# `plan` is a package for the same reason `evidence` is one: the orchestrator
+# builds and runs a plan, the validator judges one, and neither may import the
+# other -- so the type they both speak sits below both (D-44).
 layers =
     routes
-    orchestrator : intent : validation
+    orchestrator
+    validation
+    plan
+    intent
+    llm
     tools
     verification
     provenance
@@ -64,12 +80,24 @@ layers =
 exhaustive = false
 
 [importlinter:contract:3]
-name = Nothing below the agent plane imports a vendor SDK
+name = The agent plane reaches a vendor SDK only through llm/provider.py
 type = forbidden
+# `allow_indirect_imports` is the whole point of this contract, not a loophole
+# in it. `llm.provider` is the one module permitted to import the SDK, and every
+# module here is expected to reach it *through* that abstraction -- so a
+# transitive check would forbid the design it exists to enforce. What is banned
+# is a direct `import anthropic` in the agent plane, which is how a retry
+# helper or a token count quietly becomes a second, unaudited model call site.
+#
+# Contract 1 stays transitive, and must: the deterministic and trust planes may
+# not reach a model by any route at all.
+allow_indirect_imports = True
 source_modules =
     routes
     orchestrator
     intent
     validation
+    plan
+    tools
 forbidden_modules =
     anthropic

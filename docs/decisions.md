@@ -789,3 +789,104 @@ surrogate key gives it nothing to resolve against. The table also had no column 
 `Aggregation` at all — every leaf's support would have been dropped on the way to storage.
 
 **Cost to reverse.** Medium. It is a migration, and stored ids are the addresses citations use.
+
+---
+
+### D-44 — The agent plane is layered, and the execution plan is its own package
+
+**Decision.** `.importlinter` contract 2 now orders `orchestrator` / `validation` / `plan` /
+`intent` / `llm` strictly, where the first three were siblings. `ExecutionPlan` and `PlanNode` live
+in a `plan` package rather than beside the planner.
+
+**Why.** The same defect as [D-28](#d-28--the-trust-plane-is-a-strict-order-and-evidence-receives-the-context), found
+the same way: siblings may not import each other, and the moment those packages had contents they
+all needed to. The planner reads an `Intent`, the validator judges a `ExecutionPlan`, and the
+orchestrator calls the validator — three edges the sibling arrangement forbids.
+
+Ordering them by the direction the pipeline runs is the honest shape. The one thing that did not
+fit is the plan itself: the orchestrator *builds and runs* a plan and the validator *judges* one,
+so it cannot live in either without the other importing upward. It is a vocabulary, exactly as
+`evidence` is, and vocabularies sit below the things that consume them.
+
+`llm` sits under `intent` because the parser is the only module above the trust boundary that
+speaks to a model, and nothing else should acquire that ability by accident.
+
+**Cost to reverse.** Low mechanically; the arrangement is what keeps the dependency direction
+checkable at all.
+
+---
+
+### D-45 — The eleventh validation gate: an input reference must name a dependency
+
+**Decision.** A `PlanNode` may declare `references: {input -> NodeRef}` for a value produced by an
+earlier node. `UNRESOLVED_INPUT_REFERENCE` rejects a reference to a node that is not in the plan,
+or that this node does not depend on. [05-agent-runtime.md](05-agent-runtime.md#validation) listed
+ten checks; the exit criterion asked for eleven.
+
+**Why.** The gap is real and this is what fills it. Every analysis tool takes the reconciliation
+`run_id` ([D-35](#d-35--the-three-analysis-tools-take-a-run_id-which-the-spec-did-not-ask-for)),
+and that value does not exist when the plan is written. Three ways to express it:
+
+- put a placeholder in `inputs` and substitute at execution time — the validator then checks a
+  string that is not the value, and `MISSING_TOOL_INPUT` passes on a plan that cannot run;
+- string interpolation (`"${reconcile.run_id}"`) — invisible to a schema, so nothing can check it;
+- a typed reference, which is checkable.
+
+The dependency half is the part that earns its own code. A reference to a node that exists but is
+not a dependency resolves to nothing at execution time — the referenced node may not have run yet —
+and would surface as a tool error deep in a DAG rather than as a rejection before anything ran.
+`REJECTED` is terminal *and nothing executed*; a check that fires after execution has started is a
+different guarantee.
+
+Two nodes sharing an id is refused by `ExecutionPlan` itself rather than by a twelfth code: a plan
+with two nodes called `reconcile` has no single meaning to reject, because the graph the validator
+would walk is already not the graph the author wrote.
+
+**Cost to reverse.** Low. Removing it would make the spec's own "nothing executed" promise
+conditional.
+
+---
+
+### D-46 — The blanket float ban is scoped to money-bearing packages
+
+**Decision.** `scripts/check_no_float.py` check 2 — bare `float(` or a `float` annotation — now
+applies to `runtime`, `reconciliation`, `tools`, `evidence`, `verification`, `provenance`, `routes`
+and the seed generator. Checks 1, 3 and 4 (`_paise: float`, `/` on a `_paise` name, `round()`)
+stay universal.
+
+**Why.** Phase 6 added a plane that legitimately deals in floats: a network timeout, a
+`time.monotonic()` duration. Neither is money and neither is near money. Three options were on the
+table and two of them were worse:
+
+- write awkward code to dodge the guard, which teaches everyone that the guard is an obstacle;
+- add a broad exemption when it next fires, which is how the packages it exists for stop being
+  covered.
+
+Scoping it makes the check mean what its own message has always said — "float used in a
+money-bearing package" — and leaves the three money-specific checks universal, so a `_paise` field,
+a division on one, or a `round()` is still a violation wherever it appears.
+
+**Cost to reverse.** Low, but a future money-bearing package must be added to the list, and that
+is the failure mode to watch.
+
+---
+
+### D-47 — The vendor-SDK contract checks direct imports, not transitive ones
+
+**Decision.** `.importlinter` contract 3 sets `allow_indirect_imports = True`. Contract 1 — the
+deterministic and trust planes cannot reach `llm` — stays transitive, and must.
+
+**Why.** `llm/provider.py` is the one module permitted to import the SDK, and every agent-plane
+module is *expected* to reach it through that abstraction. A transitive check forbids exactly the
+design it exists to enforce, so leaving it transitive would mean deleting the contract the first
+time the parser was written.
+
+What is banned is a direct `import anthropic` in the agent plane, which is how a retry helper or a
+token count quietly becomes a second, unaudited call site with its own timeout and its own idea of
+what a failure looks like.
+
+The distinction is worth stating because the two contracts now read similarly and mean different
+things. Contract 1 is about a boundary nothing may cross by any route. Contract 3 is about a
+boundary that must be crossed at exactly one place.
+
+**Cost to reverse.** Low.

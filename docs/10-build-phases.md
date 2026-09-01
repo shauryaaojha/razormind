@@ -189,6 +189,25 @@ and the `evidence` table is keyed on the metric's address rather than a surrogat
 - Independent nodes demonstrably run concurrently (wall time < sum of node times)
 - Every state transition has an `execution_events` row with a monotonic `seq`
 
+All five hold. Three notes on how, because each involved a judgement:
+
+**The ten questions run against a scripted provider**, not a live model, and seven route while
+three ask. That tests the parser — validation, the confidence gate, the three clarification
+reasons, the merchant check, the retry — deterministically and completely. Whether a real model
+routes these correctly is a different question with a different answer, and it belongs in Phase
+11's eval suite as a *score*: a model right 29 times out of 30 has not broken the build. A live
+run is available through `task.py ask` whenever a key is configured.
+
+**The eleventh gate did not exist.** The table in
+[05-agent-runtime.md](05-agent-runtime.md#validation) listed ten, and the missing one is real:
+every analysis tool takes a `run_id` that does not exist when the plan is written, so a plan needs
+typed input *references*, and a reference to a node this one does not depend on has to be caught
+before execution starts
+([D-45](decisions.md#d-45--the-eleventh-validation-gate-an-input-reference-must-name-a-dependency)).
+
+**Concurrency is asserted with sleeping fakes.** Four nodes of 0.4s each finish in well under the
+1.6s a serial run would take. Timing the four real analyses would be timing Postgres.
+
 **Do not build yet.** The explainer. The UI.
 
 ---

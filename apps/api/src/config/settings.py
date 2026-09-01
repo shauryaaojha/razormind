@@ -5,6 +5,7 @@ used only by the seeding job (docs/12-tech-stack.md#deployment), never by the
 request path, so the API process has no way to reach for it.
 """
 
+from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 
@@ -32,6 +33,12 @@ class Settings(BaseSettings):
     # supported mode, not a failure: docs/12-tech-stack.md#failure-is-a-first-class-path.
     anthropic_api_key: str | None = None
     llm_enabled: bool = False
+    llm_model: str = "claude-sonnet-5"
+
+    #: Below this, the intent parser asks rather than assumes
+    #: (docs/05-agent-runtime.md#intent). Guessing a comparison period is the
+    #: single easiest way to produce a confidently wrong finance answer.
+    intent_confidence_threshold: Decimal = Decimal("0.75")
 
     intent_timeout_seconds: int = Field(default=30, ge=1)
     explain_timeout_seconds: int = Field(default=60, ge=1)

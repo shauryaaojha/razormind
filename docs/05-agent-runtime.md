@@ -105,10 +105,20 @@ Every transition appends to `execution_events` and emits an SSE frame
   "merchant_id": "M123",
   "period": { "from": "2026-08-01", "to": "2026-08-24" },
   "comparison_period": { "from": "2026-07-01", "to": "2026-07-24" },
-  "confidence": 0.92,
-  "clarification_needed": false
+  "confidence_ratio": 0.92,
+  "clarification_needed": false,
+  "clarification": null
 }
 ```
+
+`confidence_ratio`, not `confidence`: it is a number in `[0, 1]` and the unit suffix costs nothing
+here. It is deliberately **not** a metric in the vocabulary and never will be — it is a property of
+the parse, not of the merchant's money, and nothing may ever claim it in prose.
+
+The response is obtained through a **forced tool call**, not a "reply in JSON" instruction: the
+schema is generated from the model class and sent as the tool's input schema, so the output is
+constrained rather than requested. It is parsed from the raw JSON *text*, so `0.92` becomes
+`Decimal("0.92")` exactly instead of arriving through a binary float.
 
 Notes on the corrected version:
 
@@ -150,8 +160,26 @@ revenue_diagnosis:
                    (diagnosis)
 ```
 
-Each node declares `tool`, `version`, `inputs`, `depends_on`, `required_role`.
-Independent nodes run concurrently via `asyncio.gather`.
+Each node declares `tool`, `version`, `inputs`, `references`, `depends_on`, `required_role` and
+`required`. Independent nodes run concurrently via `asyncio.gather`.
+
+`references` exists because every analysis tool needs the reconciliation `run_id`
+([D-35](decisions.md#d-35--the-three-analysis-tools-take-a-run_id-which-the-spec-did-not-ask-for)),
+and that value does not exist when the plan is written:
+
+```json
+{ "id": "revenue", "tool": "finance.revenue_analysis", "version": "1.0",
+  "references": { "run_id": { "from_node": "reconcile", "field": "run_id" } },
+  "depends_on": ["reconcile"] }
+```
+
+A typed reference rather than string interpolation, so the validator can check that it resolves
+*and* that the node it names is actually a dependency
+([D-45](decisions.md#d-45--the-eleventh-validation-gate-an-input-reference-must-name-a-dependency)).
+
+`ExecutionPlan` lives in its own `plan` package rather than beside the planner: the orchestrator
+builds and runs a plan, the validator judges one, and neither may import the other
+([D-44](decisions.md#d-44--the-agent-plane-is-layered-and-the-execution-plan-is-its-own-package)).
 
 v2 lets the LLM *propose* a plan from `registry.describe()`. The validator does not soften — an
 LLM-proposed plan passes exactly the same gates. This is why planning can be handed to the model
@@ -173,6 +201,22 @@ Fires before any tool runs. A rejection is a structured object, not an exception
 | Intent `merchant_id` equals session `merchant_id` | `MERCHANT_SCOPE_VIOLATION` |
 | Caller's role satisfies every node's `required_role` | `INSUFFICIENT_PERMISSION` |
 | Required tool inputs all present and typed | `MISSING_TOOL_INPUT` |
+| Every input reference names a node this one depends on | `UNRESOLVED_INPUT_REFERENCE` |
+
+The eleventh was not in the original table, and the phase's own exit criterion asked for eleven.
+It is the gate that makes "`REJECTED` is terminal and nothing executed" true rather than
+conditional: a reference to a node that is not a dependency resolves to nothing at execution time
+and would surface as a tool error deep in a running DAG
+([D-45](decisions.md#d-45--the-eleventh-validation-gate-an-input-reference-must-name-a-dependency)).
+
+Two nodes sharing an id is refused by `ExecutionPlan` itself rather than by a twelfth code: the
+graph a validator would walk is already not the graph the author wrote.
+
+**Every check is evaluated, not short-circuited.** "Your period is backwards" and "your period is
+backwards *and* names another merchant" call for different responses, and a validator that stopped
+at the first would make the second invisible until the user fixed the first and resubmitted. The
+*reported* rejection is the first in `REJECTION_CODES` order, so the same broken plan always
+reports the same headline reason.
 
 ```json
 {
@@ -211,6 +255,14 @@ Rules:
 - Per-node timeout 30s, whole-run timeout 120s. A timeout is a node failure, not a hang.
 - Each node writes a `tool_executions` row with input, output, status and duration before the
   next layer starts.
+- **Each node gets its own database connection.** An asyncpg connection cannot serve two queries
+  at once, so nodes sharing one would either serialise — defeating the concurrency the layering
+  exists for — or corrupt each other's protocol state. Layer boundaries are transaction
+  boundaries, which is also what makes the reconciliation run visible to the analyses that read it.
+
+On the golden window the four analyses finish in about the time of the slowest one rather than the
+sum of all four, which is the property `tests/test_agent_db.py` asserts with sleeping fakes rather
+than with the real tools — timing the real ones would be timing Postgres.
 
 ## Recovery
 
@@ -221,9 +273,18 @@ Rules:
 | Reconciliation fails | Whole run fails; no downstream numbers exist | `FAILED` |
 | Non-required tool fails | Continue; mark metric unavailable in the answer | `PARTIAL` -> `COMPLETED` |
 | Verification fails | Block explanation entirely | `BLOCKED` |
+| No LLM configured at intent time | Refuse; never invent an intent | `FAILED` + `PROVIDER_UNAVAILABLE` |
 | LLM unavailable / times out | Deterministic template summary of verified metrics | `COMPLETED` + `TEMPLATE_FALLBACK` |
 | Grounding fails twice | Same template fallback | `COMPLETED` + `TEMPLATE_FALLBACK` |
 
 The pattern throughout: **degrade the prose, never the numbers**. A user who loses the LLM still
 sees the verified revenue bridge. A user whose verification failed sees no numbers at all, which
 is the correct outcome.
+
+The two LLM rows are not the same case, and the difference matters. Losing the model at
+*explanation* time costs phrasing, and the template renders the verified metrics without it.
+Losing it at *intent* time costs the question itself — there is nothing to fall back to, because
+the only thing that knows which analysis was asked for is the model. So `get_provider()` returns a
+provider that refuses every call, the parser turns that into `PROVIDER_UNAVAILABLE`, and the run
+fails. A canned intent would answer a question nobody asked, verified and cited, with nothing
+anywhere indicating that no model was consulted.

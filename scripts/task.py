@@ -55,16 +55,39 @@ def _compose(*args: str) -> int:
 #: Targets that need Postgres, and so run in the api service (which is on the
 #: compose network and waits for the database to be healthy) rather than in
 #: the standalone tools container.
-NEEDS_DATABASE = {"migrate", "loadseed", "reconcile", "revenue", "diagnose", "verify", "dbtest"}
+NEEDS_DATABASE = {
+    "migrate",
+    "loadseed",
+    "reconcile",
+    "revenue",
+    "diagnose",
+    "verify",
+    "ask",
+    "dbtest",
+}
 
 
-def _in_tools(target: str) -> int:
+#: Targets that take free-form arguments rather than being a bare verb. Every
+#: other target is a name and nothing else, which is what lets `task.py check
+#: test` mean "run both".
+TAKES_ARGUMENTS = {"ask"}
+
+
+def _in_tools(target: str, *args: str) -> int:
     """Run one target inside a container."""
     if target in NEEDS_DATABASE:
         return _compose(
-            "run", "--rm", "--build", "--entrypoint", "python", "api", "scripts/task.py", target
+            "run",
+            "--rm",
+            "--build",
+            "--entrypoint",
+            "python",
+            "api",
+            "scripts/task.py",
+            target,
+            *args,
         )
-    return _compose("run", "--rm", "--build", "tools", "scripts/task.py", target)
+    return _compose("run", "--rm", "--build", "tools", "scripts/task.py", target, *args)
 
 
 # --------------------------------------------------------------------------
@@ -183,6 +206,11 @@ def verify() -> int:
     return _run("scripts/verify.py")
 
 
+def ask(*args: str) -> int:
+    """One question through the whole agent runtime: intent, plan, DAG, verification."""
+    return _run("scripts/ask.py", *args)
+
+
 def test() -> int:
     """pytest with branch coverage on runtime/, which must stay at 100%."""
     return _run("-m", "pytest", "--cov", "--cov-report=term-missing")
@@ -225,6 +253,7 @@ TARGETS: dict[str, Callable[[], int]] = {
     "revenue": revenue,
     "diagnose": diagnose,
     "verify": verify,
+    "ask": ask,
     "dbtest": dbtest,
     "test": test,
     "check": check,
@@ -245,6 +274,15 @@ def _usage() -> int:
 def main(argv: list[str]) -> int:
     if not argv or argv[0] in {"-h", "--help", "--list"}:
         return _usage()
+
+    # A target that takes arguments consumes the rest of the line. Checking
+    # this before the unknown-target scan is what stops a question being read
+    # as a list of targets nobody registered.
+    if argv[0] in TAKES_ARGUMENTS:
+        target, arguments = argv[0], argv[1:]
+        if IN_CONTAINER:
+            return TARGETS[target](*arguments)
+        return _in_tools(target, *arguments)
 
     unknown = [name for name in argv if name not in TARGETS]
     if unknown:
