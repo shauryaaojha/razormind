@@ -19,9 +19,9 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, field_serializer, model_validator
 
-__all__ = ["Aggregation", "Evidence", "Formula", "Unit"]
+from .vocabulary import Unit, UnknownMetricError, metric
 
-type Unit = Literal["paise", "ratio", "pp", "count"]
+__all__ = ["Aggregation", "Evidence", "Formula", "Unit"]
 
 
 class Formula(BaseModel):
@@ -80,6 +80,9 @@ class Evidence(BaseModel):
     value: int | Decimal
     period_from: str
     period_to: str
+    #: The slice this row measures, for a metric the vocabulary declares a
+    #: dimension for -- ``"UPI"`` on a ``by_method.*`` row. ``None`` otherwise.
+    dimension_value: str | None = None
 
     formula: Formula | None = None
     aggregation: Aggregation | None = None
@@ -95,6 +98,46 @@ class Evidence(BaseModel):
             raise ValueError(
                 f"evidence {self.id!r} must carry exactly one of formula or aggregation"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _metric_is_registered(self) -> Self:
+        """The vocabulary decides what may be published (C-04).
+
+        Checked here as well as at import, because a tool declares its metric
+        ids as a class attribute and nothing stops it emitting a row for
+        something else. The unit check is the one that matters most: a ratio
+        published as ``pp`` renders as a plausible number that means something
+        else entirely, which is the failure C-04 exists to stop.
+        """
+        try:
+            registered = metric(self.metric_id)
+        except UnknownMetricError as error:
+            # Re-raised as a ValueError so pydantic reports it as a validation
+            # failure on this field rather than letting a KeyError escape from
+            # the middle of model construction.
+            raise ValueError(str(error)) from error
+        if self.unit != registered.unit:
+            raise ValueError(
+                f"evidence {self.id!r} publishes {self.metric_id!r} as {self.unit!r}, "
+                f"but the vocabulary declares {registered.unit!r}"
+            )
+        if registered.dimension is None and self.dimension_value is not None:
+            raise ValueError(
+                f"{self.metric_id!r} is not measured over a dimension, but "
+                f"{self.id!r} carries the value {self.dimension_value!r}"
+            )
+        if registered.dimension is not None:
+            if self.dimension_value is None:
+                raise ValueError(
+                    f"{self.metric_id!r} is measured per {registered.dimension}, "
+                    f"and {self.id!r} names no {registered.dimension}"
+                )
+            if registered.values is not None and self.dimension_value not in registered.values:
+                raise ValueError(
+                    f"{self.dimension_value!r} is not a {registered.dimension}; "
+                    f"{self.metric_id!r} admits {sorted(registered.values)}"
+                )
         return self
 
     @field_serializer("value")

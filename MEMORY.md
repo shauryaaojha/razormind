@@ -114,9 +114,10 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 | 0 — Foundations | **Done.** `check` green: ruff, mypy strict, 3 import contracts, money guard, 100% branch coverage on `runtime/` |
 | 1 — Data plane & golden fixture | **Done**, then reworked to a market-calibrated pipeline (D-23…D-27). 13 tables + RLS, calibration layer, scenario, ground truth, 10 fixture assertions |
 | 2 — Reconciliation engine | **Done.** 5 rules, greedy one-to-one, shuffle test, per-instrument fee rule, 4 read endpoints |
-| 3 — Tool framework & revenue | **Done.** `DeterministicTool` ABC + registry, `finance.reconciliation`, `finance.revenue_analysis`, restricted formula interpreter. 225 + 46 tests |
-| 4 — Remaining tools | next |
-| 5–12 | not started |
+| 3 — Tool framework & revenue | **Done.** `DeterministicTool` ABC + registry, `finance.reconciliation`, `finance.revenue_analysis`, restricted formula interpreter |
+| 4 — Remaining tools | **Done.** `payments.failure_analysis`, `finance.refund_analysis`, `risk.chargeback_analysis`, metric vocabulary enforced at import. 266 + 73 tests |
+| 5 — Trust layer | next |
+| 6–12 | not started |
 
 ### Notes from Phase 0 worth not rediscovering
 
@@ -234,3 +235,36 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
   without the mypy plugin.
 - `DeterministicTool` is invariant in its type parameters, so the registry stores
   `DeterministicTool[Any, Any]`. The concrete types are recovered at the call site.
+
+### Notes from Phase 4 worth not rediscovering
+
+- **The unit is read from the metric id, never passed alongside it.** `EvidencePublisher` takes no
+  `unit` argument. A tool that cannot state the unit twice cannot state it inconsistently, which
+  is what actually closes C-04. → [D-33](docs/decisions.md#d-33--the-metric-vocabulary-is-enforced-at-import-and-the-unit-comes-from-the-id)
+- **`__init_subclass__` is the import-time gate.** It runs at class creation, so an unregistered
+  metric id is a build failure. Note it runs *before* `ABCMeta` sets `__abstractmethods__`, so it
+  cannot check for abstract methods -- that check stays with `ABC` itself.
+- **`UnknownMetricError` is a `KeyError`, and pydantic only converts `ValueError`/`AssertionError`
+  into a `ValidationError`.** The Evidence validator re-raises it as a `ValueError`, or a KeyError
+  escapes from the middle of model construction.
+- **`by_method.*` is one metric with a `method` dimension**, not four metrics. `attribution.*` is
+  the opposite -- five different formulas, so five metrics. A dimension slices one *computation*.
+  → [D-34](docs/decisions.md#d-34--a-metric-measured-over-a-dimension-is-one-metric-with-a-slice-not-one-per-value)
+- **All four analysis tools need the `run_id`.** The spec asked for it only on revenue, which makes
+  its own consistency check unsatisfiable: without the duplicate set, `succeeded_value_paise`
+  exceeds `gross_payments_paise` by exactly one payment.
+  → [D-35](docs/decisions.md#d-35--the-three-analysis-tools-take-a-run_id-which-the-spec-did-not-ask-for)
+- **Scoping lives in `tools/records.py`, once.** Four tools totalling the same window is only
+  consistent if they share the scoping function; two copies would make the cross-tool check a test
+  of whether two implementations had drifted.
+- **A `_pp_change` must cite the two rates it came from.** Recovering the earlier rate by inverting
+  the published change makes layer 4 re-derive the answer from the answer -- a check that cannot
+  fail. `failure_analysis` carries both periods' rail breakdowns for exactly this.
+- **The blended rate is the summed counts.** It is not the mean of the rail rates, and the two
+  differ whenever volumes differ. The exit criterion is the identity, not a figure.
+- **Phase 4's quoted figures were pre-calibration** (96.81% -> 90.32%, UPI 96.8% -> 82.9%). The
+  live figures are 95.80% -> 94.46% and 96.44% -> 94.62%.
+  → [D-36](docs/decisions.md#d-36--phase-4s-quoted-exit-figures-are-superseded-by-the-calibrated-fixture)
+- `scripts/check_no_float.py` now blanks string literals and comments with `tokenize` before
+  scanning. It was reading an evidence id in a docstring -- `.../net_revenue_paise/2026-08-01_...`
+  -- as a division. A guard that cries wolf on documentation gets worked around rather than fixed.

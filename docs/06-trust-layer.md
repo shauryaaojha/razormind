@@ -32,27 +32,66 @@ finance.revenue_analysis    attempted_value_paise, gross_payments_paise,
                             attribution.refunds_effect_paise,
                             attribution.fees_effect_paise,
                             attribution.chargebacks_effect_paise
-payments.failure_analysis   attempted_value_paise, succeeded_value_paise,
+payments.failure_analysis   attempt_count, succeeded_count,
+                            attempted_value_paise, succeeded_value_paise,
                             failed_value_paise, success_rate_ratio,
-                            success_rate_pp_change, by_method[]
-finance.refund_analysis     refund_value_paise, refund_rate_ratio,
-                            refund_value_change_paise
+                            success_rate_pp_change,
+                            technical_decline_ratio, business_decline_ratio,
+                            by_method.attempt_count,
+                            by_method.succeeded_count,
+                            by_method.attempted_value_paise,
+                            by_method.succeeded_value_paise,
+                            by_method.success_rate_ratio,
+                            by_method.success_rate_pp_change
+finance.refund_analysis     refund_value_paise, refund_count, refund_rate_ratio,
+                            refund_value_change_paise, gross_payments_paise,
+                            by_reason.refund_value_paise, by_reason.refund_count
 risk.chargeback_analysis    chargeback_value_paise, chargeback_count,
-                            chargeback_rate_ratio, chargeback_value_change_paise
+                            chargeback_rate_ratio, chargeback_value_change_paise,
+                            gross_payments_paise,
+                            by_reason.chargeback_value_paise,
+                            by_reason.chargeback_count
 ```
+
+The list lives in `evidence/vocabulary.py`, and it is **enforced twice**
+([D-33](decisions.md#d-33--the-metric-vocabulary-is-enforced-at-import-and-the-unit-comes-from-the-id)):
+
+- `DeterministicTool.__init_subclass__` refuses a tool declaring an unregistered id, so the
+  failure happens at class creation — import — and cannot ship.
+- `Evidence` refuses a row whose id is unregistered or whose unit disagrees with the suffix.
+
+The unit is never passed alongside a metric; it is **read from the id**. A tool cannot disagree
+with itself about what it is publishing, because it only says it once. That closes C-04 properly:
+a ratio published under a `_pp` field renders as a plausible number meaning something else, and
+every check downstream would pass.
 
 An id not on this list cannot be published, cited, or claimed. Adding one is a code change plus a
 docs change, deliberately.
 
-`attribution[]` is written out as five metric ids rather than left as an array. An array of
-unnamed terms cannot be cited: "the attribution says −₹77,452" has no id to resolve, and grounding
-check 2 has nothing to look up. `matched_clean_count` is listed because it is the numerator of
-`clean_match_rate_ratio`, and an operand that is not itself a metric is where a provenance chain
-stops.
+### Dimensions, and when not to use one
 
-`attempted_value_paise` is published by **two** tools, and that is the point: it is the same
-quantity computed from the same reconciled set, so the consistency layer has something to compare.
-Two tools that disagree about it is a defect nothing else would catch.
+`by_method.success_rate_ratio` is **one** metric measured over a `method` dimension, with the four
+rails as its permitted values. Each evidence row names its slice, and the evidence id carries it:
+`.../by_method.success_rate_ratio/2026-08-01_2026-08-24#UPI`. Enumerating a metric per rail would
+put twenty-four entries here for six quantities, and would assert that a UPI success rate and a
+card success rate are different *metrics* when they are the same computation over different
+records.
+
+`attribution[]` is the opposite case and is deliberately **not** dimensioned. Its five terms have
+genuinely different formulas — the volume effect applies a proportion, the refund effect is a
+negated delta — so they are five metrics, not five slices of one. A dimension slices one
+computation ([D-34](decisions.md#d-34--a-metric-measured-over-a-dimension-is-one-metric-with-a-slice-not-one-per-value)).
+
+An array of unnamed terms cannot be cited either way: "the attribution says −₹77,452" has no id to
+resolve, and grounding check 2 has nothing to look up.
+
+`matched_clean_count`, `attempt_count` and `succeeded_count` are registered because they are the
+*operands* of published ratios, and an operand that is not itself a metric is where a provenance
+chain stops.
+
+`attempted_value_paise` is published by **two** tools and `gross_payments_paise` by **three**.
+That is the point: the same quantity computed from the same reconciled set, so the consistency
+layer has something to compare. Two tools disagreeing about it is a defect nothing else catches.
 
 ## Verification
 
@@ -112,10 +151,25 @@ Rules the verifier enforces:
 
 ### Cross-tool consistency
 
-`finance.revenue_analysis.gross_payments_paise` must equal
-`payments.failure_analysis.succeeded_value_paise` for the same period, exactly. Two tools
-computing the same quantity from the same reconciled set that disagree is a defect, and the
-consistency layer is the only place that catches it.
+Two tools computing the same quantity from the same reconciled set and disagreeing is a defect,
+and the consistency layer is the only place that catches it. There are two shapes:
+
+**Same id, two tools.** `attempted_value_paise` and `gross_payments_paise` are published under
+their own names by more than one tool. Nothing extra is needed to compare them.
+
+**Different names, one quantity.** The revenue bridge calls a number `gross_payments_paise`; the
+failure analysis calls the same number `succeeded_value_paise`. Nothing would ever compare those,
+so `EQUIVALENCES` in `evidence/vocabulary.py` declares them equal:
+
+```text
+gross_payments_paise  ==  succeeded_value_paise
+refunds_paise         ==  refund_value_paise
+chargebacks_paise     ==  chargeback_value_paise
+```
+
+All three hold exactly on the golden window, which is only possible because every tool scopes its
+records through the same function and every one of them takes the reconciliation `run_id`
+([D-35](decisions.md#d-35--the-three-analysis-tools-take-a-run_id-which-the-spec-did-not-ask-for)).
 
 ## Evidence
 

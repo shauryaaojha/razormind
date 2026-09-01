@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from evidence.models import Evidence
+from evidence.vocabulary import METRICS, unit_for
 from verification.models import VerificationResult
 
 __all__ = [
@@ -32,7 +33,16 @@ __all__ = [
     "ToolInput",
     "ToolRun",
     "ToolSpec",
+    "UnregisteredMetricError",
 ]
+
+
+class UnregisteredMetricError(TypeError):
+    """A tool declared a metric id the vocabulary does not know.
+
+    A ``TypeError`` because it is raised while the class is being created: the
+    class is malformed, in the same way one missing an ``@abstractmethod`` is.
+    """
 
 
 class ToolError(Exception):
@@ -140,9 +150,28 @@ class DeterministicTool[TIn: BaseModel, TOut: BaseModel](ABC):
     output_model: ClassVar[type[BaseModel]]
     required_role: ClassVar[str] = "ANALYST"
 
-    #: The metric ids this tool publishes. Phase 4 checks these against the
-    #: registered vocabulary; the plan validator reads them from ``describe()``.
+    #: The metric ids this tool publishes, checked against the registered
+    #: vocabulary when the class is created. The plan validator reads them from
+    #: ``describe()``.
     metrics: ClassVar[tuple[str, ...]] = ()
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Refuse a tool that publishes a metric nobody registered.
+
+        At class creation, which is import. A tool shipping an unregistered
+        metric id is a build failure rather than something a reader discovers
+        when a claim about it cannot be checked -- an unregistered id has no
+        declared unit, so grounding has nothing to compare a claim against
+        (docs/06-trust-layer.md#metric-vocabulary).
+        """
+        super().__init_subclass__(**kwargs)
+        unregistered = [name for name in cls.metrics if name not in METRICS]
+        if unregistered:
+            raise UnregisteredMetricError(
+                f"{cls.__name__} publishes {', '.join(repr(n) for n in unregistered)}, "
+                "which is not in the metric vocabulary; adding one is a code change plus a "
+                "docs change (docs/06-trust-layer.md#metric-vocabulary)"
+            )
 
     @abstractmethod
     async def execute(self, inp: TIn, ctx: ToolContext) -> TOut:
@@ -202,6 +231,11 @@ class DeterministicTool[TIn: BaseModel, TOut: BaseModel](ABC):
                 f"input names period {period}, but this execution analyses {ctx.period}",
                 {"requested": str(period), "authorised": str(ctx.period)},
             )
+
+    @classmethod
+    def metric_units(cls) -> dict[str, str]:
+        """Every published metric with the unit its id declares."""
+        return {name: unit_for(name) for name in cls.metrics}
 
     @classmethod
     def spec(cls) -> ToolSpec:

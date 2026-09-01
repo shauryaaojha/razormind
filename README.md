@@ -47,7 +47,7 @@ before anything non-deterministic touches it.
  1  Data plane          schema, seed generator, golden fixture      [DONE]
  2  Reconciliation      matcher, exceptions, invariants             [DONE]
  3  Tool framework      the contract + revenue analysis            [DONE]
- 4  Remaining tools     failure, refund, chargeback
+ 4  Remaining tools     failure, refund, chargeback                [DONE]
  5  Trust layer         verification, evidence, provenance
 ------------------------------------------------------------------  first LLM call
  6  Agent runtime       intent, plan, validate, execute, state
@@ -172,6 +172,7 @@ image, which is why "works on my machine" and "passes CI" are not separate claim
 | `task.py migrate` / `loadseed` | Alembic, then load `seed.sql` |
 | `task.py reconcile` | reconcile the golden window and persist the run |
 | `task.py revenue` | the golden revenue bridge, through both v1 tools |
+| `task.py diagnose` | every v1 tool, plus the cross-tool equivalences |
 | `task.py test` | pytest, 100% branch coverage required on `runtime/` |
 | `task.py dbtest` | row-level security, against a real Postgres |
 | `task.py dev` / `web` / `psql` | containers, foreground |
@@ -180,9 +181,9 @@ image, which is why "works on my machine" and "passes CI" are not separate claim
 
 ## Status
 
-**Phases 0 through 3 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
-contracts, the no-float guard, the ten fixture assertions, and 225 tests with 100% branch
-coverage on `runtime/`. A further 46 integration tests run against a real Postgres.
+**Phases 0 through 4 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
+contracts, the no-float guard, the ten fixture assertions, and 266 tests with 100% branch
+coverage on `runtime/`. A further 73 integration tests run against a real Postgres.
 
 The three boundary mechanisms exist before any domain logic does, which is the point of the phase:
 
@@ -274,7 +275,63 @@ sum over 341 records has no arithmetic to re-evaluate, and giving it a decorativ
 make layer 4 a check that passes by construction
 ([D-29](docs/decisions.md#d-29--evidence-carries-a-formula-or-an-aggregation-never-both-never-neither)).
 
-**Next: Phase 4 — the remaining three tools and the metric vocabulary registry.**
+Phase 4 finished the metric coverage: `payments.failure_analysis`,
+`finance.refund_analysis`, `risk.chargeback_analysis`, and the vocabulary that decides what any
+of them may say.
+
+### A name is not allowed to mean two things
+
+`evidence/vocabulary.py` is the authority on which metric ids exist, and it is enforced twice: a
+tool declaring an unregistered id fails **at import**, and an evidence row whose unit disagrees
+with its id is refused. The unit is never passed alongside a metric — it is read from the id, so
+a tool cannot disagree with itself about what it is publishing.
+
+That is what finally closes C-04. A ratio published under a `_pp` field renders as a plausible
+number meaning something else, and every check downstream passes.
+
+`by_method.success_rate_ratio` is a different metric id from `success_rate_ratio`, which is the
+fix for C-03 — the vision quoted a UPI rate of 96.8% falling to 82.9% beside a portfolio claim of
+"14.3% more failures", with no derivation between them and no unit on the second. An explainer
+now cannot substitute one for the other, because they do not share a name.
+
+### The blended rate is the summed counts, not an average
+
+```text
+                             prior     current    change
+blended                     95.80%      94.46%  -1.34 pp
+  CARD                      92.75%      93.10%   0.35 pp
+  NETBANKING                96.00%      95.24%  -0.76 pp
+  UPI                       96.44%      94.62%  -1.82 pp
+  WALLET                    96.15%      95.45%  -0.70 pp
+technical declines           0.70%       2.22%   1.52 pp
+business declines            3.50%       3.32%  -0.17 pp
+```
+
+Those two bottom rows are the diagnosis. Technical declines more than triple while business
+declines stay flat — that asymmetry is what attributes the movement to the rails rather than to
+customers running out of money. Either rate on its own says nothing.
+
+CARD went *up* while the portfolio went down, which is the sort of thing an average of rail rates
+hides and a summed-count identity does not.
+
+### Three tools, one number
+
+`revenue.gross_payments_paise == failure.succeeded_value_paise`, exactly, along with the other two
+declared equivalences:
+
+```text
+ok  gross_payments_paise == succeeded_value_paise   {40626000} / {40626000}
+ok  refunds_paise        == refund_value_paise      {1178200}  / {1178200}
+ok  chargebacks_paise    == chargeback_value_paise  {174700}   / {174700}
+```
+
+That holds by construction rather than by luck: every tool scopes its records through one shared
+function, and all four take the reconciliation `run_id` — which the spec asked for only on
+revenue, making its own consistency requirement unsatisfiable
+([D-35](docs/decisions.md#d-35--the-three-analysis-tools-take-a-run_id-which-the-spec-did-not-ask-for)).
+
+**Next: Phase 5 — the trust layer.** The five verification layers in order, cross-tool consistency
+enforced rather than tested, and the evidence and provenance builders.
 
 ---
 

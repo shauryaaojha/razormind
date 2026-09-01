@@ -16,44 +16,25 @@ report published beside it. The run supplies two things of different kinds:
 """
 
 from decimal import Decimal
-from typing import ClassVar, Literal, Self
+from typing import ClassVar
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict
 
-from evidence.models import Aggregation, Evidence, Formula
+from evidence.models import Evidence
 from runtime.money import Paise, ZeroDenominatorError, ratio
 from verification.models import Checks, VerificationResult
 
-from ..base import DeterministicTool, Period, ToolContext, ToolError, ToolInput
+from ..analysis import AnalysisInput, load_run_facts_or_refuse
+from ..base import DeterministicTool, Period, ToolContext, ToolError
+from ..publishing import EvidencePublisher
+from ..repository import RunFacts, load_chargebacks, load_payments, load_refunds
 from .bridge import DRIVERS, Attribution, RevenueWindow, attribute, build_window
-from .repository import (
-    RunFacts,
-    load_chargebacks,
-    load_payments,
-    load_refunds,
-    load_run_facts,
-)
 
 __all__ = ["RevenueAnalysisInput", "RevenueAnalysisOutput", "RevenueAnalysisTool"]
 
 
-class RevenueAnalysisInput(ToolInput):
+class RevenueAnalysisInput(AnalysisInput):
     """The analysis window, what to compare it against, and the run behind it."""
-
-    comparison_period: Period
-    run_id: str
-
-    @model_validator(mode="after")
-    def _periods_are_disjoint(self) -> Self:
-        overlaps = self.comparison_period.from_ < self.period.to and (
-            self.period.from_ < self.comparison_period.to
-        )
-        if overlaps:
-            raise ValueError(
-                f"comparison period {self.comparison_period} overlaps the analysis period "
-                f"{self.period}; the shared payments would be counted on both sides of the bridge"
-            )
-        return self
 
 
 class RevenueBridge(BaseModel):
@@ -143,7 +124,7 @@ class RevenueAnalysisTool(DeterministicTool[RevenueAnalysisInput, RevenueAnalysi
     )
 
     async def execute(self, inp: RevenueAnalysisInput, ctx: ToolContext) -> RevenueAnalysisOutput:
-        facts = await self._run_facts(inp, ctx)
+        facts = await load_run_facts_or_refuse(inp, ctx)
 
         current = await self._window(
             ctx, inp.merchant_id, inp.period, facts.duplicate_transaction_ids
@@ -182,35 +163,6 @@ class RevenueAnalysisTool(DeterministicTool[RevenueAnalysisInput, RevenueAnalysi
             current_sources=_sources(current),
             prior_sources=_sources(prior),
         )
-
-    async def _run_facts(self, inp: RevenueAnalysisInput, ctx: ToolContext) -> RunFacts:
-        """The run must exist, belong to this merchant, and cover this period.
-
-        Checked rather than assumed. A run over a different window would import
-        another period's duplicates and another period's confidence band, and
-        the bridge would still close -- around the wrong number.
-        """
-        facts = await load_run_facts(ctx.conn, inp.run_id)
-        if facts is None:
-            raise ToolError(
-                "RUN_NOT_FOUND",
-                f"no reconciliation run {inp.run_id}",
-                {"run_id": inp.run_id},
-            )
-        if facts.merchant_id != inp.merchant_id:
-            raise ToolError(
-                "MERCHANT_SCOPE_VIOLATION",
-                f"run {inp.run_id} belongs to another merchant",
-                {"run_id": inp.run_id},
-            )
-        if (facts.period_from, facts.period_to) != (inp.period.from_, inp.period.to):
-            raise ToolError(
-                "RUN_PERIOD_MISMATCH",
-                f"run {inp.run_id} covers [{facts.period_from}, {facts.period_to}), "
-                f"but the analysis period is {inp.period}",
-                {"run_id": inp.run_id, "analysis_period": str(inp.period)},
-            )
-        return facts
 
     @staticmethod
     async def _window(
@@ -404,83 +356,14 @@ def _limitations(facts: RunFacts, prior: RevenueWindow) -> list[str]:
 # --------------------------------------------------------------------------
 
 
-class _EvidenceBuilder:
-    """Turns a published output into the rows that let someone disbelieve it.
+class _EvidenceBuilder(EvidencePublisher):
+    """The revenue bridge, expressed as rows someone can disbelieve.
 
-    An operand reference is an evidence id of this tool's own rows where one
-    exists, ``<tool>.<metric_id>`` for a metric another tool owns, and
-    ``"literal"`` otherwise. That is what lets the provenance drawer be a
-    generic recursive renderer: every operand either resolves to more evidence
-    or terminates.
+    Only the two shapes specific to this tool live here -- one window's lines,
+    and the metrics about the movement between two windows. Ids, units and the
+    leaf/derived split come from ``EvidencePublisher``, so four tools cannot
+    drift into four conventions.
     """
-
-    def __init__(self, tool: str, version: str, execution_id: str, checks: list[str]) -> None:
-        self.tool = tool
-        self.version = version
-        self.execution_id = execution_id
-        self.checks = checks
-
-    def identifier(self, metric_id: str, period: Period) -> str:
-        return f"{self.tool}/{self.version}/{metric_id}/{period.from_}_{period.to}"
-
-    def _row(
-        self,
-        metric_id: str,
-        period: Period,
-        unit: Literal["paise", "ratio", "count"],
-        value: int | Decimal,
-        *,
-        formula: Formula | None = None,
-        aggregation: Aggregation | None = None,
-        inputs: dict[str, int | Decimal],
-        source_record_ids: list[str],
-        rules: list[str],
-    ) -> Evidence:
-        return Evidence(
-            id=self.identifier(metric_id, period),
-            execution_id=self.execution_id,
-            tool_name=self.tool,
-            tool_version=self.version,
-            metric_id=metric_id,
-            unit=unit,
-            value=value,
-            period_from=period.from_.isoformat(),
-            period_to=period.to.isoformat(),
-            formula=formula,
-            aggregation=aggregation,
-            inputs=inputs,
-            source_record_ids=source_record_ids,
-            rules_applied=rules,
-            verification_checks=self.checks,
-        )
-
-    def _sum(
-        self,
-        metric_id: str,
-        period: Period,
-        value: int,
-        field_name: str,
-        over: str,
-        predicate: str,
-        record_ids: list[str],
-    ) -> Evidence:
-        """A leaf: no arithmetic to re-evaluate, only records to re-sum."""
-        return self._row(
-            metric_id,
-            period,
-            "paise",
-            value,
-            aggregation=Aggregation(
-                operation="SUM",
-                field_name=field_name,
-                over=over,
-                predicate=predicate,
-                unit="paise",
-            ),
-            inputs={"record_count": len(record_ids)},
-            source_record_ids=record_ids,
-            rules=[predicate],
-        )
 
     def window(self, bridge: RevenueBridge, sources: WindowSources) -> list[Evidence]:
         period = bridge.period
@@ -491,10 +374,10 @@ class _EvidenceBuilder:
         captured = f"{attempted}, and status = CAPTURED"
         reversal = (
             "tied to a capture in the window; a refund belongs to the period of the payment "
-            "it reverses, not the period it was raised in"
+            "it reverses, not the period it was raised in (D-31)"
         )
         return [
-            self._sum(
+            self.total(
                 "attempted_value_paise",
                 period,
                 bridge.attempted_value_paise,
@@ -503,7 +386,7 @@ class _EvidenceBuilder:
                 attempted,
                 sources.attempt_transaction_ids,
             ),
-            self._sum(
+            self.total(
                 "gross_payments_paise",
                 period,
                 bridge.gross_payments_paise,
@@ -512,7 +395,7 @@ class _EvidenceBuilder:
                 captured,
                 sources.capture_transaction_ids,
             ),
-            self._sum(
+            self.total(
                 "fees_paise",
                 period,
                 bridge.fees_paise,
@@ -521,7 +404,7 @@ class _EvidenceBuilder:
                 captured + "; the fee follows the instrument, not a flat rate (D-24)",
                 sources.capture_transaction_ids,
             ),
-            self._sum(
+            self.total(
                 "refunds_paise",
                 period,
                 bridge.refunds_paise,
@@ -530,7 +413,7 @@ class _EvidenceBuilder:
                 reversal,
                 sources.refund_ids,
             ),
-            self._sum(
+            self.total(
                 "chargebacks_paise",
                 period,
                 bridge.chargebacks_paise,
@@ -539,29 +422,24 @@ class _EvidenceBuilder:
                 reversal,
                 sources.chargeback_ids,
             ),
-            self._row(
+            self.derived(
                 "net_revenue_paise",
                 period,
-                "paise",
                 bridge.net_revenue_paise,
-                formula=Formula(
-                    expression="gross - refunds - fees - chargebacks",
-                    operands={
-                        "gross": self.identifier("gross_payments_paise", period),
-                        "refunds": self.identifier("refunds_paise", period),
-                        "fees": self.identifier("fees_paise", period),
-                        "chargebacks": self.identifier("chargebacks_paise", period),
-                    },
-                    unit="paise",
-                ),
-                inputs={
+                "gross - refunds - fees - chargebacks",
+                {
+                    "gross": self.identifier("gross_payments_paise", period),
+                    "refunds": self.identifier("refunds_paise", period),
+                    "fees": self.identifier("fees_paise", period),
+                    "chargebacks": self.identifier("chargebacks_paise", period),
+                },
+                {
                     "gross": bridge.gross_payments_paise,
                     "refunds": bridge.refunds_paise,
                     "fees": bridge.fees_paise,
                     "chargebacks": bridge.chargebacks_paise,
                 },
-                source_record_ids=[],
-                rules=["bridge identity (docs/06-trust-layer.md#bridge-identity)"],
+                ["bridge identity (docs/06-trust-layer.md#bridge-identity)"],
             ),
         ]
 
@@ -579,84 +457,62 @@ class _EvidenceBuilder:
         effects = {term.driver: term.effect_paise for term in out.attribution}
 
         rows = [
-            self._row(
+            self.derived(
                 "net_revenue_change_paise",
                 here,
-                "paise",
                 out.net_revenue_change_paise,
-                formula=Formula(
-                    expression="current - prior",
-                    operands={"current": net_current, "prior": net_prior},
-                    unit="paise",
-                ),
-                inputs={"current": current.net_revenue_paise, "prior": prior.net_revenue_paise},
-                source_record_ids=[],
-                rules=["delta identity"],
+                "current - prior",
+                {"current": net_current, "prior": net_prior},
+                {"current": current.net_revenue_paise, "prior": prior.net_revenue_paise},
+                ["delta identity"],
             ),
-            self._row(
+            self.derived(
                 "net_revenue_change_ratio",
                 here,
-                "ratio",
                 Decimal(out.net_revenue_change_ratio),
-                formula=Formula(
-                    expression="(current - prior) / prior",
-                    operands={"current": net_current, "prior": net_prior},
-                    unit="ratio",
-                ),
-                inputs={"current": current.net_revenue_paise, "prior": prior.net_revenue_paise},
-                source_record_ids=[],
-                rules=["ratio at scale 6, rounded half-up once (D-01)"],
+                "(current - prior) / prior",
+                {"current": net_current, "prior": net_prior},
+                {"current": current.net_revenue_paise, "prior": prior.net_revenue_paise},
+                ["ratio at scale 6, rounded half-up once (D-01)"],
             ),
-            self._row(
+            self.derived(
                 "attribution.attempt_volume_effect_paise",
                 here,
-                "paise",
                 effects["ATTEMPT_VOLUME"],
-                formula=Formula(
-                    # rate_prior * (attempted_current - attempted_prior), applied
-                    # as a single rounding rather than materialising the rate.
-                    expression=(
-                        "(attempted_current - attempted_prior) * gross_prior / attempted_prior"
-                    ),
-                    operands={
-                        "attempted_current": self.identifier("attempted_value_paise", here),
-                        "attempted_prior": self.identifier("attempted_value_paise", there),
-                        "gross_prior": self.identifier("gross_payments_paise", there),
-                    },
-                    unit="paise",
-                ),
-                inputs={
+                # rate_prior * (attempted_current - attempted_prior), applied as
+                # a single rounding rather than materialising the rate first.
+                "(attempted_current - attempted_prior) * gross_prior / attempted_prior",
+                {
+                    "attempted_current": self.identifier("attempted_value_paise", here),
+                    "attempted_prior": self.identifier("attempted_value_paise", there),
+                    "gross_prior": self.identifier("gross_payments_paise", there),
+                },
+                {
                     "attempted_current": current.attempted_value_paise,
                     "attempted_prior": prior.attempted_value_paise,
                     "gross_prior": prior.gross_payments_paise,
                 },
-                source_record_ids=[],
-                rules=["rate/volume split (docs/06-trust-layer.md#bridge-identity)"],
+                ["rate/volume split (docs/06-trust-layer.md#bridge-identity)"],
             ),
-            self._row(
+            self.derived(
                 "attribution.success_rate_effect_paise",
                 here,
-                "paise",
                 effects["SUCCESS_RATE"],
-                formula=Formula(
-                    # The exact remainder of the volume effect, not a second
-                    # independent rounding: rounding both is how a bridge stops
-                    # closing.
-                    expression="(gross_current - gross_prior) - volume",
-                    operands={
-                        "gross_current": self.identifier("gross_payments_paise", here),
-                        "gross_prior": self.identifier("gross_payments_paise", there),
-                        "volume": self.identifier("attribution.attempt_volume_effect_paise", here),
-                    },
-                    unit="paise",
-                ),
-                inputs={
+                # The exact remainder of the volume effect, not a second
+                # independent rounding: rounding both is how a bridge stops
+                # closing.
+                "(gross_current - gross_prior) - volume",
+                {
+                    "gross_current": self.identifier("gross_payments_paise", here),
+                    "gross_prior": self.identifier("gross_payments_paise", there),
+                    "volume": self.identifier("attribution.attempt_volume_effect_paise", here),
+                },
+                {
                     "gross_current": current.gross_payments_paise,
                     "gross_prior": prior.gross_payments_paise,
                     "volume": effects["ATTEMPT_VOLUME"],
                 },
-                source_record_ids=[],
-                rules=["rate/volume split, computed as the remainder"],
+                ["rate/volume split, computed as the remainder"],
             ),
         ]
 
@@ -666,51 +522,40 @@ class _EvidenceBuilder:
             ("CHARGEBACKS", "attribution.chargebacks_effect_paise", "chargebacks_paise"),
         ):
             rows.append(
-                self._row(
+                self.derived(
                     metric_id,
                     here,
-                    "paise",
                     effects[driver],
-                    formula=Formula(
-                        # A delta, negated: more refunds is less revenue.
-                        # Entering these as gross values was C-02 error #2.
-                        expression="prior - current",
-                        operands={
-                            "current": self.identifier(field_name, here),
-                            "prior": self.identifier(field_name, there),
-                        },
-                        unit="paise",
-                    ),
-                    inputs={
+                    # A delta, negated: more refunds is less revenue. Entering
+                    # these as gross values was C-02 error #2.
+                    "prior - current",
+                    {
+                        "current": self.identifier(field_name, here),
+                        "prior": self.identifier(field_name, there),
+                    },
+                    {
                         "current": getattr(current, field_name),
                         "prior": getattr(prior, field_name),
                     },
-                    source_record_ids=[],
-                    rules=["deductions enter the bridge as deltas, never as gross values"],
+                    ["deductions enter the bridge as deltas, never as gross values"],
                 )
             )
 
         rows.append(
-            self._row(
+            self.derived(
                 "rounding_residual_paise",
                 here,
-                "paise",
                 out.rounding_residual_paise,
-                formula=Formula(
-                    expression="change - volume - rate - refunds - fees - chargebacks",
-                    operands={
-                        "change": self.identifier("net_revenue_change_paise", here),
-                        "volume": self.identifier("attribution.attempt_volume_effect_paise", here),
-                        "rate": self.identifier("attribution.success_rate_effect_paise", here),
-                        "refunds": self.identifier("attribution.refunds_effect_paise", here),
-                        "fees": self.identifier("attribution.fees_effect_paise", here),
-                        "chargebacks": self.identifier(
-                            "attribution.chargebacks_effect_paise", here
-                        ),
-                    },
-                    unit="paise",
-                ),
-                inputs={
+                "change - volume - rate - refunds - fees - chargebacks",
+                {
+                    "change": self.identifier("net_revenue_change_paise", here),
+                    "volume": self.identifier("attribution.attempt_volume_effect_paise", here),
+                    "rate": self.identifier("attribution.success_rate_effect_paise", here),
+                    "refunds": self.identifier("attribution.refunds_effect_paise", here),
+                    "fees": self.identifier("attribution.fees_effect_paise", here),
+                    "chargebacks": self.identifier("attribution.chargebacks_effect_paise", here),
+                },
+                {
                     "change": out.net_revenue_change_paise,
                     "volume": effects["ATTEMPT_VOLUME"],
                     "rate": effects["SUCCESS_RATE"],
@@ -718,30 +563,26 @@ class _EvidenceBuilder:
                     "fees": effects["FEES"],
                     "chargebacks": effects["CHARGEBACKS"],
                 },
-                source_record_ids=[],
-                rules=["the plug; abs(residual) <= term count, or it is a formula error"],
+                ["the plug; abs(residual) <= term count, or it is a formula error"],
             )
         )
         rows.append(
-            self._row(
+            self.derived(
                 "confidence_band_ratio",
                 here,
-                "ratio",
                 Decimal(out.confidence_band_ratio),
-                formula=Formula(
-                    expression="unresolved / net",
-                    operands={
-                        "unresolved": "finance.reconciliation.unresolved_exception_value_paise",
-                        "net": net_current,
-                    },
-                    unit="ratio",
-                ),
-                inputs={
+                "unresolved / net",
+                {
+                    "unresolved": self.cross_tool(
+                        "finance.reconciliation", "unresolved_exception_value_paise"
+                    ),
+                    "net": net_current,
+                },
+                {
                     "unresolved": out.unresolved_exception_value_paise,
                     "net": current.net_revenue_paise,
                 },
-                source_record_ids=[],
-                rules=["a band on the bridge, never a term in it (Invariant 7)"],
+                ["a band on the bridge, never a term in it (Invariant 7)"],
             )
         )
         return rows

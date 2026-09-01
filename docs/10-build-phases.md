@@ -116,10 +116,21 @@ correct and provable before anything non-deterministic touches it.
 - The metric vocabulary registry ([06-trust-layer.md](06-trust-layer.md#metric-vocabulary))
 
 **Exit criteria**
-- Blended success rate falls out of the method mix: 96.81% → 90.32%
-- UPI method rate is 96.8% → 82.9% and is a *different metric id* from the blended rate
-- `revenue.gross_payments_paise == failure.succeeded_value_paise`, exactly
+- Blended success rate falls out of the method mix — the rails' counts sum to the blended counts
+  exactly, and the blended rate is that ratio rather than an average of the rail rates
+- The UPI rate is a *different metric id* from the blended rate
+- `revenue.gross_payments_paise == failure.succeeded_value_paise`, exactly, and every declared
+  equivalence in the vocabulary holds
 - Publishing an unregistered metric id raises at import time
+
+> **The figures this phase originally quoted are superseded.** It asked for a blended rate of
+> 96.81% → 90.32% and a UPI rate of 96.8% → 82.9%; those describe the fixture before it was
+> market-calibrated. The generated dataset gives blended **95.80% → 94.46% (−1.34 pp)** and UPI
+> **96.44% → 94.62% (−1.82 pp)**. Asserting the old numbers would mean either testing a figure the
+> generator does not produce, or tuning the generator until it produced one somebody wrote down in
+> advance — which is what [D-26](decisions.md#d-26--counts-are-designed-money-is-derived) exists to
+> prevent. The identities above are what the figures were expressing, and they are stronger
+> ([D-36](decisions.md#d-36--phase-4s-quoted-exit-figures-are-superseded-by-the-calibrated-fixture)).
 
 ---
 

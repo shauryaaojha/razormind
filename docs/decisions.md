@@ -522,3 +522,107 @@ The comparison period is deliberately **not** reconciled, and the tool says so i
 rather than implying a symmetry it does not have.
 
 **Cost to reverse.** Medium. Removing the dependency would silently change `gross_payments_paise`.
+
+---
+
+### D-33 — The metric vocabulary is enforced at import, and the unit comes from the id
+
+**Decision.** `evidence/vocabulary.py` is the authority on which metric ids exist.
+`DeterministicTool.__init_subclass__` refuses a tool declaring an unregistered id, so the failure
+is at class creation — import — rather than at query time. `Evidence` refuses a row whose
+`metric_id` is unregistered or whose `unit` disagrees with the suffix, and the evidence publisher
+never takes a unit as an argument: it reads it from the id.
+
+**Why.** [C-04](00-corrections.md#c-04-m--claims-carry-no-units) says every metric id ends in a
+unit suffix. That was a naming convention, and a naming convention is worth nothing the first time
+someone publishes a ratio under a `_pp` field — it renders as a plausible number that means
+something else, and every check downstream passes.
+
+Taking the unit *from* the id rather than alongside it removes the class of mistake entirely: a
+tool cannot disagree with itself about what it is publishing, because it only says the thing once.
+
+The import-time half matters for a different reason. A metric id with no vocabulary entry has no
+declared unit, so grounding has nothing to byte-match a claim against; the claim would be
+unverifiable rather than wrong, which is worse. Catching it at import means it cannot ship.
+
+**Cost to reverse.** Low mechanically. The discipline is the point, and relaxing it would quietly
+return the system to conventions.
+
+---
+
+### D-34 — A metric measured over a dimension is one metric with a slice, not one per value
+
+**Decision.** `by_method.success_rate_ratio` is a single registered metric carrying
+`dimension: "method"` and the four rails as its permitted values. Each evidence row names its
+slice in `dimension_value`, and the evidence id carries it (`.../2026-08-01_2026-08-24#UPI`).
+
+The five `attribution.*_effect_paise` terms stay as five separate ids, deliberately.
+
+**Why.** Enumerating `by_method.upi.success_rate_ratio`, `by_method.card...` and so on would put
+twenty-four entries in the vocabulary for six quantities, and adding a fifth rail — RuPay credit
+on UPI is already a distinct instrument — would mean six more. Worse, it would assert that a UPI
+success rate and a card success rate are *different metrics*, when they are the same computation
+over different records.
+
+The attribution terms are the opposite case and that is why they are not dimensioned: the volume
+effect applies a proportion, the refund effect is a negated delta, and they have genuinely
+different formulas. A dimension slices one computation; these are five computations. Writing them
+as one metric would make a shared formula impossible to state honestly.
+
+This is still the fix for [C-03](00-corrections.md#c-03-m--the-upi-figure-was-disconnected-from-the-headline):
+`success_rate_ratio` and `by_method.success_rate_ratio` are different ids, so an explainer cannot
+substitute a rail's rate for the portfolio's. They differ by name, not only by value.
+
+**Cost to reverse.** Medium. Stored evidence would carry the old shape.
+
+---
+
+### D-35 — The three analysis tools take a `run_id`, which the spec did not ask for
+
+**Decision.** `payments.failure_analysis`, `finance.refund_analysis` and
+`risk.chargeback_analysis` all require the reconciliation `run_id`, exactly as
+`finance.revenue_analysis` does. [04-tool-contract.md](04-tool-contract.md#tool-set) listed it
+only for revenue.
+
+**Why.** The spec's own cross-tool consistency check is unsatisfiable without it. The fixture has
+342 ledger records and 341 payments; the difference is a duplicated capture that only the
+reconciliation run identifies. Without the run's duplicate set,
+`failure_analysis.succeeded_value_paise` includes that payment and
+`revenue_analysis.gross_payments_paise` does not, so
+[06-trust-layer.md](06-trust-layer.md#cross-tool-consistency)'s requirement that the two be equal
+*exactly* could never hold — and the consistency layer would report a defect in the tools rather
+than the missing input that caused it.
+
+The same applies to the two reversal tools: a refund against a duplicated capture must not reduce
+a gross that never included it.
+
+**Cost to reverse.** Low, and reversing it would break the consistency check by construction.
+
+---
+
+### D-36 — Phase 4's quoted exit figures are superseded by the calibrated fixture
+
+**Decision.** [10-build-phases.md](10-build-phases.md#phase-4--remaining-tools) asked for a
+blended success rate of 96.81% → 90.32% and a UPI rate of 96.8% → 82.9%. Those numbers describe
+the pre-calibration fixture. The exit criteria are restated as the *identities* they were
+expressing, and the figures are taken from `ground_truth.json`: blended 95.80% → 94.46%
+(−1.34 pp), UPI 96.44% → 94.62% (−1.82 pp).
+
+**Why.** The market-calibration rework ([D-23](#d-23--the-dataset-is-market-calibrated-not-arbitrary),
+[D-26](#d-26--counts-are-designed-money-is-derived)) made the story emerge from the data instead of
+being written into it, which was the whole point of that work. Keeping a hard-coded figure as an
+exit criterion would mean either asserting a number the generator no longer produces, or tuning
+the generator until it produced a number somebody wrote down in advance — and the second is
+exactly what D-26 exists to prevent.
+
+The structural criteria survive intact and are stronger than the figures were: that the blended
+rate is the summed counts rather than an average of rail rates, and that a rail's rate is a
+different metric id from the portfolio's. Both are asserted as exact identities.
+
+**What the calibrated story lost, and gained.** The original 13.9-point UPI collapse was
+dramatic and implausible; a real issuer incident confined to three banks over eleven days moves a
+portfolio UPI rate by under two points. The subtler number is the harder test — a model that
+reasons from narrative will still reach for the incident, and the arithmetic still says attempt
+volume.
+
+**Cost to reverse.** Low, but it would mean reintroducing figures the data does not produce.

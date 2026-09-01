@@ -5,7 +5,12 @@ Correction C-01 says money is an integer number of paise and that
 until something fails the build. This is that something.
 
 Three checks, all textual, all deliberately dumb -- a source scan cannot be
-tricked by an import alias the way a runtime check can:
+tricked by an import alias the way a runtime check can. It reads **code**,
+though, not prose: string literals and comments are blanked out first, because
+an evidence id like ``.../net_revenue_paise/2026-08-01_2026-08-24`` in a
+docstring is not a division, and a guard that cries wolf on documentation gets
+worked around rather than fixed. Blanking is done by ``tokenize``, so it
+cannot be fooled by a quote inside a string.
 
 1. A field or annotation named ``*_paise`` typed as ``float``.
 2. ``float(`` or a ``float`` annotation anywhere in the API source.
@@ -14,8 +19,10 @@ tricked by an import alias the way a runtime check can:
 Run: ``python scripts/check_no_float.py``
 """
 
+import io
 import re
 import sys
+import tokenize
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,13 +52,45 @@ def _iter_sources() -> list[Path]:
     return files
 
 
+def _code_lines(source: str) -> list[str]:
+    """The source with every string literal and comment blanked out.
+
+    Line numbers and column positions are preserved so a violation still points
+    at the right place; only the *content* of strings and comments is replaced,
+    with spaces.
+    """
+    lines = source.splitlines()
+    blanked = list(lines)
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        # An unparseable file is not something to silently pass: fall back to
+        # scanning it raw rather than skipping it.
+        return lines
+    for token in tokens:
+        if token.type not in (tokenize.STRING, tokenize.COMMENT, tokenize.FSTRING_MIDDLE):
+            continue
+        (start_row, start_col), (end_row, end_col) = token.start, token.end
+        for row in range(start_row, end_row + 1):
+            index = row - 1
+            if index >= len(blanked):
+                continue
+            text = blanked[index]
+            begins = start_col if row == start_row else 0
+            ends = end_col if row == end_row else len(text)
+            blanked[index] = text[:begins] + " " * (ends - begins) + text[ends:]
+    return blanked
+
+
 def scan() -> list[str]:
     """Return one human-readable violation per offending line."""
     violations: list[str] = []
     for path in _iter_sources():
         exempt = path in ROUNDING_EXEMPT
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            code = line.split("#", 1)[0]
+        source = path.read_text(encoding="utf-8")
+        raw = source.splitlines()
+        for lineno, code in enumerate(_code_lines(source), start=1):
+            line = raw[lineno - 1]
             if not code.strip():
                 continue
             for pattern, message in CHECKS:

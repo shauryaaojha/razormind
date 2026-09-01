@@ -9,6 +9,11 @@ Window bounds are computed in IST and pushed into SQL as aware timestamps. The
 alternative -- ``attempted_at::date`` -- would compare a UTC calendar date
 against an IST window, and a payment at 20:00 UTC on 1 August is 01:30 IST on
 the 2nd (C-10).
+
+This module sits at the top of ``tools/`` rather than inside ``finance/``
+because all four analysis tools read the same records. Two loaders would be two
+chances to scope a window differently, and the cross-tool consistency check
+would then be comparing two copies of the same bug.
 """
 
 from collections.abc import Sequence
@@ -28,7 +33,7 @@ from runtime.schema import (
     transactions,
 )
 
-from .bridge import MovementRecord, PaymentRecord
+from .records import MovementRecord, PaymentRecord
 
 __all__ = [
     "RunFacts",
@@ -118,7 +123,7 @@ async def load_refunds(
     """Refunds against the given payments, whenever they were raised.
 
     Scoped by parent, never by the refund's own date: a refund belongs to the
-    window of the payment it reverses (see ``bridge.py``).
+    window of the payment it reverses (see ``records.py``).
     """
     return await _load_movements(conn, refunds, merchant_id, transaction_ids)
 

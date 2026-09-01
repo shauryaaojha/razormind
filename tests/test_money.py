@@ -10,11 +10,14 @@ from decimal import Decimal
 import pytest
 
 from runtime.money import (
+    PP_SCALE,
     RATIO_SCALE,
     ZeroDenominatorError,
     apply_rate,
     apply_ratio,
+    pp_change,
     quantize_paise,
+    quantize_pp,
     quantize_ratio,
     ratio,
 )
@@ -189,3 +192,46 @@ class TestQuantize:
         """An int is already exact, so passing one means a unit was confused."""
         with pytest.raises(TypeError, match="must be Decimal"):
             quantize_paise(3)  # type: ignore[arg-type]
+
+
+class TestPercentagePoints:
+    """A percentage point is not a percent (C-04).
+
+    A success rate falling from 0.958042 to 0.944598 fell by 1.34 *points*. It
+    did not fall by 1.34 percent -- that would be a fall of about 1.40 points,
+    a different number that a reader has no way to tell apart once the unit is
+    dropped. Keeping the conversion in one function with a ``_pp`` result is
+    what stops the two ever being computed the same way by accident.
+    """
+
+    def test_the_golden_blended_move(self) -> None:
+        assert pp_change(Decimal("0.944598"), Decimal("0.958042")) == Decimal("-1.34")
+
+    def test_the_golden_upi_move(self) -> None:
+        assert pp_change(Decimal("0.946154"), Decimal("0.964401")) == Decimal("-1.82")
+
+    def test_a_rise_is_positive(self) -> None:
+        assert pp_change(Decimal("0.958042"), Decimal("0.944598")) == Decimal("1.34")
+
+    def test_a_point_is_not_a_percent(self) -> None:
+        """The same move expressed the other way is a different number."""
+        points = pp_change(Decimal("0.944598"), Decimal("0.958042"))
+        percent = (
+            (Decimal("0.944598") - Decimal("0.958042")) / Decimal("0.958042") * 100
+        ).quantize(PP_SCALE)
+        assert points != percent
+
+    def test_no_change_is_zero_points(self) -> None:
+        assert pp_change(Decimal("0.5"), Decimal("0.5")) == Decimal("0.00")
+
+    def test_points_round_half_up(self) -> None:
+        assert quantize_pp(Decimal("-1.345")) == Decimal("-1.35")
+        assert quantize_pp(Decimal("1.345")) == Decimal("1.35")
+
+    def test_a_float_is_refused(self) -> None:
+        with pytest.raises(TypeError, match="must be Decimal"):
+            quantize_pp(1.5)  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="must be Decimal"):
+            pp_change(0.9, Decimal("0.8"))  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="must be Decimal"):
+            pp_change(Decimal("0.9"), 0.8)  # type: ignore[arg-type]

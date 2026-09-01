@@ -14,12 +14,15 @@ Rules (docs/02-data-model.md#money, correction C-01):
 from decimal import ROUND_HALF_UP, Decimal, localcontext
 
 __all__ = [
+    "PP_SCALE",
     "RATIO_SCALE",
     "Paise",
     "ZeroDenominatorError",
     "apply_rate",
     "apply_ratio",
+    "pp_change",
     "quantize_paise",
+    "quantize_pp",
     "quantize_ratio",
     "ratio",
 ]
@@ -29,6 +32,11 @@ type Paise = int
 
 RATIO_SCALE = Decimal("0.000001")
 """Ratios are Decimals at scale 6. Field suffix ``_ratio``."""
+
+PP_SCALE = Decimal("0.01")
+"""Percentage points are Decimals at scale 2. Field suffix ``_pp``."""
+
+_HUNDRED = Decimal(100)
 
 _WHOLE = Decimal(1)
 
@@ -130,3 +138,32 @@ def quantize_ratio(exact: Decimal) -> Decimal:
     Decimal('-0.175956')
     """
     return _require_decimal(exact, "exact").quantize(RATIO_SCALE, rounding=ROUND_HALF_UP)
+
+
+def quantize_pp(exact: Decimal) -> Decimal:
+    """Round an exact Decimal to a scale-2 percentage point, half-up.
+
+    >>> quantize_pp(Decimal("-1.3444"))
+    Decimal('-1.34')
+    """
+    return _require_decimal(exact, "exact").quantize(PP_SCALE, rounding=ROUND_HALF_UP)
+
+
+def pp_change(current_ratio: Decimal, prior_ratio: Decimal) -> Decimal:
+    """The move between two ratios, in **percentage points**.
+
+    A percentage point is not a percent. A success rate going from 0.958042 to
+    0.944598 fell by 1.34 *points*; it did not fall by 1.34 *percent*, which
+    would be a different number. Conflating the two was the root of C-04, and
+    keeping the conversion in one function with a ``_pp`` result is what stops
+    the two ever being computed the same way by accident.
+
+    Both arguments are the **published** scale-6 ratios rather than raw counts,
+    so the result is reproducible from the evidence a reader can see.
+
+    >>> pp_change(Decimal("0.944598"), Decimal("0.958042"))
+    Decimal('-1.34')
+    """
+    _require_decimal(current_ratio, "current_ratio")
+    _require_decimal(prior_ratio, "prior_ratio")
+    return quantize_pp((current_ratio - prior_ratio) * _HUNDRED)

@@ -152,24 +152,69 @@ counted on both sides of the bridge — and the input model refuses one that doe
 
 ### `payments.failure_analysis` v1.0
 
-- **In:** `merchant_id`, `period`, `comparison_period`, optional `method`
-- **Out:** attempted/succeeded/failed value and count, success rate, per-method breakdown
-- **Metrics:** `attempted_value_paise`, `success_rate_ratio`, `success_rate_pp_change`,
-  `failed_value_paise`, `by_method[]`
+- **In:** `merchant_id`, `period`, `comparison_period`, `run_id`, optional `method`
+- **Out:** attempted/succeeded/failed value and count, blended success rate, the decline taxonomy,
+  and the per-rail breakdown for **both** periods
+- **Metrics:** `attempt_count`, `succeeded_count`, `attempted_value_paise`,
+  `succeeded_value_paise`, `failed_value_paise`, `success_rate_ratio`, `success_rate_pp_change`,
+  `technical_decline_ratio`, `business_decline_ratio`, and the six `by_method.*` metrics
 
-Publishes both the blended rate and the per-method rate. Keeping these as separate metric ids is
+Publishes both the blended rate and the per-rail rate. Keeping these as separate metric ids is
 the fix for [C-03](00-corrections.md#c-03-m--the-upi-figure-was-disconnected-from-the-headline) —
-the explainer can no longer conflate a UPI rate with a portfolio rate.
+the explainer can no longer conflate a UPI rate with a portfolio rate, because they do not share
+a name.
+
+The blended rate is the ratio of the **summed counts**, not an average of the rail rates. Those
+are different numbers whenever the rails carry different volumes, which is exactly the situation
+the original figures could not reconcile. `verify()` asserts the counts sum, as an identity.
+
+Both periods' rail breakdowns are in the output because a `_pp_change` must cite the two rates it
+came from. Recovering the earlier rate by inverting the published change would make layer 4
+re-derive the answer from the answer.
+
+`technical_decline_ratio` and `business_decline_ratio` are published together because the
+*asymmetry* is the evidence. Technical declines tripling while business declines stay flat is what
+attributes a movement to the rails rather than to customers; either rate alone says nothing.
+
+`method` narrows every figure to one rail. A narrowed window is **not** comparable with the
+revenue bridge, and the tool says so in `limitations` rather than publishing a partial figure
+under a portfolio name.
 
 ### `finance.refund_analysis` v1.0
 
-- **Metrics:** `refund_value_paise`, `refund_rate_ratio`, `refund_value_change_paise`,
-  `by_reason[]`
+- **In:** `merchant_id`, `period`, `comparison_period`, `run_id`
+- **Metrics:** `refund_value_paise`, `refund_count`, `refund_rate_ratio`,
+  `refund_value_change_paise`, `gross_payments_paise`, and the two `by_reason.*` metrics
 
 ### `risk.chargeback_analysis` v1.0
 
+- **In:** `merchant_id`, `period`, `comparison_period`, `run_id`
 - **Metrics:** `chargeback_value_paise`, `chargeback_count`, `chargeback_rate_ratio`,
-  `chargeback_value_change_paise`
+  `chargeback_value_change_paise`, `gross_payments_paise`, and the two `by_reason.*` metrics
+
+Both rates are **value** rates: reversed value over gross payments. The card networks' chargeback
+threshold is a *count* ratio over transactions, which is a different quantity with a different
+denominator; it is not published under the same name, because a rate that is sometimes one and
+sometimes the other is the ambiguity C-04 exists to remove. `chargeback_count` is published beside
+it so a count-based ratio can be built without guessing.
+
+Both tools publish `gross_payments_paise` — the denominator they actually used — so the rate's
+operand is a real metric rather than a number taken on trust, and so three tools' idea of gross
+can be compared.
+
+The arithmetic for both lives in one module (`tools/reversals.py`). Two implementations of "sum
+the refunds against captures in this window" would eventually disagree in some edge each handled
+differently, which is precisely the defect cross-tool consistency exists to catch and a poor
+thing to hand it.
+
+### Why all four take a `run_id`
+
+The spec originally asked for it only on `finance.revenue_analysis`. That makes its own
+consistency requirement unsatisfiable: the fixture has 342 ledger records and 341 payments, and
+only the reconciliation run identifies the duplicate. Without it,
+`failure_analysis.succeeded_value_paise` includes a payment that
+`revenue_analysis.gross_payments_paise` excludes, and the two can never be equal
+([D-35](decisions.md#d-35--the-three-analysis-tools-take-a-run_id-which-the-spec-did-not-ask-for)).
 
 ## Adding a tool
 

@@ -7,8 +7,11 @@ tool resolvable, and it is the only place a new tool is wired in.
 """
 
 from .finance.reconciliation import ReconciliationTool
+from .finance.refunds import RefundAnalysisTool
 from .finance.revenue import RevenueAnalysisTool
+from .payments.failure import FailureAnalysisTool
 from .registry import ToolRegistry
+from .risk.chargebacks import ChargebackAnalysisTool
 
 __all__ = ["REGISTRY", "build_registry"]
 
@@ -18,6 +21,9 @@ def build_registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register(ReconciliationTool())
     registry.register(RevenueAnalysisTool())
+    registry.register(FailureAnalysisTool())
+    registry.register(RefundAnalysisTool())
+    registry.register(ChargebackAnalysisTool())
     return registry
 
 

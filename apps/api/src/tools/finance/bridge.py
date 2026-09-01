@@ -5,26 +5,19 @@ separate from its repository: the arithmetic that has to close to the paise is
 testable on hand-built records, and a bug in it should not need a live Postgres
 to reproduce.
 
-Two rules decide what belongs to a window, and both matter:
-
-* **A payment belongs to the window it was attempted in**, not captured in.
-  Scoping by capture date silently drops every failure -- a failure has no
-  capture instant -- and every success rate then reads 100%.
-* **A refund or chargeback belongs to the window of the payment it reverses**,
-  not the window it was raised in. A refund raised on 26 August against an
-  August payment is August's; netting it into September would compare one
-  cohort's gross against another cohort's returns. Scoping refunds by their own
-  ``created_at`` would have moved one of this fixture's eighteen refunds into
-  the wrong window.
+Scoping lives in ``tools/records.py``, shared with the other three analysis
+tools, so ``gross_payments_paise`` here and ``succeeded_value_paise`` there are
+the same number by construction rather than by coincidence.
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 
-from runtime.calendar import ist_date
 from runtime.money import Paise, apply_ratio, ratio
+
+from ..records import MovementRecord, PaymentRecord, movements_for, scope_attempts
 
 __all__ = [
     "DRIVERS",
@@ -40,36 +33,13 @@ __all__ = [
 #: Attribution drivers, in the order the bridge reports them. Volume first
 #: because it is the largest term in the golden scenario, and the table should
 #: read top-down like the explanation.
+#:
+#: These stay five distinct metric ids rather than one metric sliced by a
+#: ``driver`` dimension, unlike ``by_method.*``. A dimension slices the *same*
+#: computation across values; these are five different computations -- the
+#: volume effect applies a proportion, the refund effect is a negated delta --
+#: and calling them one metric would make a shared formula impossible to state.
 DRIVERS = ("ATTEMPT_VOLUME", "SUCCESS_RATE", "REFUNDS", "FEES", "CHARGEBACKS")
-
-
-@dataclass(frozen=True, order=True)
-class PaymentRecord:
-    """One payment attempt, successful or not."""
-
-    id: str
-    method: str
-    instrument: str
-    status: str
-    decline_type: str | None
-    amount_paise: Paise
-    fee_paise: Paise
-    attempted_at: datetime
-    captured_at: datetime | None
-
-    @property
-    def captured(self) -> bool:
-        return self.status == "CAPTURED"
-
-
-@dataclass(frozen=True, order=True)
-class MovementRecord:
-    """A refund or a chargeback, tied to the payment it reverses."""
-
-    id: str
-    transaction_id: str
-    amount_paise: Paise
-    reason: str
 
 
 @dataclass(frozen=True)
@@ -137,24 +107,13 @@ def build_window(
     chargebacks: Iterable[MovementRecord],
     excluded_transaction_ids: frozenset[str] = frozenset(),
 ) -> RevenueWindow:
-    """Scope, then total. A function of the records, not of the caller's order.
-
-    ``excluded_transaction_ids`` is the reconciliation run's set of ledger rows
-    flagged ``POSSIBLE_DUPLICATE``. A duplicate lifts the ledger count and is
-    not revenue; excluding it here is why a reconciliation run is an *input* to
-    this analysis rather than a report published alongside it.
-    """
-    attempts = sorted(
-        record
-        for record in payments
-        if record.id not in excluded_transaction_ids
-        and period_from <= ist_date(record.attempted_at) < period_to
-    )
+    """Scope, then total. A function of the records, not of the caller's order."""
+    attempts = scope_attempts(period_from, period_to, payments, excluded_transaction_ids)
     captures = [record for record in attempts if record.captured]
-    captured_ids = {record.id for record in captures}
+    captured_ids = [record.id for record in captures]
 
-    window_refunds = _movements_for(refunds, captured_ids)
-    window_chargebacks = _movements_for(chargebacks, captured_ids)
+    window_refunds = movements_for(refunds, captured_ids)
+    window_chargebacks = movements_for(chargebacks, captured_ids)
 
     return RevenueWindow(
         period_from=period_from,
@@ -167,16 +126,10 @@ def build_window(
         fees_paise=sum(record.fee_paise for record in captures),
         chargebacks_paise=sum(movement.amount_paise for movement in window_chargebacks),
         attempt_ids=tuple(record.id for record in attempts),
-        capture_ids=tuple(record.id for record in captures),
+        capture_ids=tuple(captured_ids),
         refund_ids=tuple(movement.id for movement in window_refunds),
         chargeback_ids=tuple(movement.id for movement in window_chargebacks),
     )
-
-
-def _movements_for(
-    movements: Iterable[MovementRecord], transaction_ids: set[str]
-) -> Sequence[MovementRecord]:
-    return sorted(movement for movement in movements if movement.transaction_id in transaction_ids)
 
 
 def attribute(prior: RevenueWindow, current: RevenueWindow) -> Attribution:

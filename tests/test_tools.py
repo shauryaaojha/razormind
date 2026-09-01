@@ -7,13 +7,22 @@ anywhere said so. Most of this file is that class of failure, made loud.
 """
 
 from datetime import date
+from decimal import Decimal
 from typing import ClassVar
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
 from evidence.models import Aggregation, Evidence, Formula
-from tools.base import DeterministicTool, Period, ToolContext, ToolError, ToolInput
+from evidence.vocabulary import METRICS, unit_for
+from tools.base import (
+    DeterministicTool,
+    Period,
+    ToolContext,
+    ToolError,
+    ToolInput,
+    UnregisteredMetricError,
+)
 from tools.catalog import REGISTRY, build_registry
 from tools.finance.reconciliation import ReconciliationTool
 from tools.finance.revenue import RevenueAnalysisInput, RevenueAnalysisTool
@@ -29,39 +38,44 @@ JULY = Period(**{"from": date(2026, 7, 1), "to": date(2026, 7, 24)})
 # --------------------------------------------------------------------------
 
 
-class DoubleOutput(BaseModel):
-    doubled_count: int
+class CountingOutput(BaseModel):
+    exception_count: int
 
 
-class DoubleTool(DeterministicTool[ToolInput, DoubleOutput]):
-    """The smallest thing that satisfies the contract."""
+class CountingTool(DeterministicTool[ToolInput, CountingOutput]):
+    """The smallest thing that satisfies the contract.
 
-    name: ClassVar[str] = "test.double"
+    It publishes ``exception_count`` rather than an invented id because the
+    vocabulary admits no invented ids -- including from a test double. That
+    constraint applying to test code as well as production code is the point.
+    """
+
+    name: ClassVar[str] = "test.counting"
     version: ClassVar[str] = "1.0"
     input_model: ClassVar[type[BaseModel]] = ToolInput
-    output_model: ClassVar[type[BaseModel]] = DoubleOutput
-    metrics: ClassVar[tuple[str, ...]] = ("doubled_count",)
+    output_model: ClassVar[type[BaseModel]] = CountingOutput
+    metrics: ClassVar[tuple[str, ...]] = ("exception_count",)
 
     should_lie: bool = False
 
-    async def execute(self, inp: ToolInput, ctx: ToolContext) -> DoubleOutput:
-        return DoubleOutput(doubled_count=7 if self.should_lie else 2)
+    async def execute(self, inp: ToolInput, ctx: ToolContext) -> CountingOutput:
+        return CountingOutput(exception_count=7 if self.should_lie else 2)
 
-    def verify(self, inp: ToolInput, out: DoubleOutput) -> VerificationResult:
+    def verify(self, inp: ToolInput, out: CountingOutput) -> VerificationResult:
         checks = Checks()
-        checks.equal("doubled_is_two", out.doubled_count, 2)
+        checks.equal("count_is_two", out.exception_count, 2)
         return checks.result()
 
-    def evidence(self, inp: ToolInput, out: DoubleOutput, ctx: ToolContext) -> list[Evidence]:
+    def evidence(self, inp: ToolInput, out: CountingOutput, ctx: ToolContext) -> list[Evidence]:
         return [
             Evidence(
-                id="test.double/1.0/doubled_count",
+                id="test.counting/1.0/exception_count",
                 execution_id=ctx.execution_id,
                 tool_name=self.name,
                 tool_version=self.version,
-                metric_id="doubled_count",
+                metric_id="exception_count",
                 unit="count",
-                value=out.doubled_count,
+                value=out.exception_count,
                 period_from=inp.period.from_.isoformat(),
                 period_to=inp.period.to.isoformat(),
                 aggregation=Aggregation(
@@ -93,21 +107,21 @@ def context(merchant_id: str = "M123", period: Period = AUGUST) -> ToolContext:
 
 class TestContract:
     async def test_the_happy_path_runs_in_order(self) -> None:
-        run = await DoubleTool().run(
+        run = await CountingTool().run(
             {"merchant_id": "M123", "period": {"from": AUGUST.from_, "to": AUGUST.to}},
             context(),
         )
-        assert run.output.doubled_count == 2
+        assert run.output.exception_count == 2
         assert run.verification.passed
-        assert [item.metric_id for item in run.evidence] == ["doubled_count"]
+        assert [item.metric_id for item in run.evidence] == ["exception_count"]
 
     async def test_a_tool_whose_output_fails_its_own_invariants_never_returns_it(
         self,
     ) -> None:
         """C-11 in one test: verification is not advisory."""
-        tool = DoubleTool()
+        tool = CountingTool()
         tool.should_lie = True
-        with pytest.raises(VerificationError, match="doubled_is_two"):
+        with pytest.raises(VerificationError, match="count_is_two"):
             await tool.run(
                 {"merchant_id": "M123", "period": {"from": AUGUST.from_, "to": AUGUST.to}},
                 context(),
@@ -116,14 +130,14 @@ class TestContract:
     def test_a_tool_missing_an_abstract_method_cannot_be_instantiated(self) -> None:
         """The Phase 3 exit criterion, and the whole reason for the ABC."""
 
-        class Forgetful(DeterministicTool[ToolInput, DoubleOutput]):
+        class Forgetful(DeterministicTool[ToolInput, CountingOutput]):
             name: ClassVar[str] = "test.forgetful"
             version: ClassVar[str] = "1.0"
             input_model: ClassVar[type[BaseModel]] = ToolInput
-            output_model: ClassVar[type[BaseModel]] = DoubleOutput
+            output_model: ClassVar[type[BaseModel]] = CountingOutput
 
-            async def execute(self, inp: ToolInput, ctx: ToolContext) -> DoubleOutput:
-                return DoubleOutput(doubled_count=2)
+            async def execute(self, inp: ToolInput, ctx: ToolContext) -> CountingOutput:
+                return CountingOutput(exception_count=2)
 
         with pytest.raises(TypeError, match="abstract"):
             Forgetful()  # type: ignore[abstract]
@@ -131,7 +145,7 @@ class TestContract:
     async def test_an_input_naming_another_merchant_is_refused(self) -> None:
         """Prefigures MERCHANT_SCOPE_VIOLATION. Not left to row-level security."""
         with pytest.raises(ToolError) as raised:
-            await DoubleTool().run(
+            await CountingTool().run(
                 {"merchant_id": "M999", "period": {"from": AUGUST.from_, "to": AUGUST.to}},
                 context(merchant_id="M123"),
             )
@@ -139,7 +153,7 @@ class TestContract:
 
     async def test_an_input_naming_another_period_is_refused(self) -> None:
         with pytest.raises(ToolError) as raised:
-            await DoubleTool().run(
+            await CountingTool().run(
                 {"merchant_id": "M123", "period": {"from": JULY.from_, "to": JULY.to}},
                 context(period=AUGUST),
             )
@@ -150,11 +164,11 @@ class TestContract:
             Period(**{"from": date(2026, 8, 24), "to": date(2026, 8, 1)})
 
     def test_the_spec_is_machine_readable(self) -> None:
-        spec = DoubleTool.spec()
-        assert spec.name == "test.double"
-        assert spec.metrics == ["doubled_count"]
+        spec = CountingTool.spec()
+        assert spec.name == "test.counting"
+        assert spec.metrics == ["exception_count"]
         assert "merchant_id" in spec.input_schema["properties"]
-        assert "doubled_count" in spec.output_schema["properties"]
+        assert "exception_count" in spec.output_schema["properties"]
 
 
 # --------------------------------------------------------------------------
@@ -171,7 +185,7 @@ class TestEvidence:
                 execution_id="x",
                 tool_name="t",
                 tool_version="1.0",
-                metric_id="m",
+                metric_id="gross_payments_paise",
                 unit="paise",
                 value=1,
                 period_from="2026-08-01",
@@ -185,7 +199,7 @@ class TestEvidence:
                 execution_id="x",
                 tool_name="t",
                 tool_version="1.0",
-                metric_id="m",
+                metric_id="gross_payments_paise",
                 unit="paise",
                 value=1,
                 period_from="2026-08-01",
@@ -203,25 +217,31 @@ class TestEvidence:
 
 
 class TestRegistry:
-    def test_both_v1_tools_are_registered(self) -> None:
-        assert "finance.reconciliation" in REGISTRY
-        assert "finance.revenue_analysis" in REGISTRY
-        assert len(REGISTRY) == 2
+    def test_every_v1_tool_is_registered(self) -> None:
+        for name in (
+            "finance.reconciliation",
+            "finance.revenue_analysis",
+            "payments.failure_analysis",
+            "finance.refund_analysis",
+            "risk.chargeback_analysis",
+        ):
+            assert name in REGISTRY
+        assert len(REGISTRY) == 5
 
     def test_resolve_without_a_version_takes_the_highest(self) -> None:
         registry = ToolRegistry()
 
-        class V2(DoubleTool):
+        class V2(CountingTool):
             version: ClassVar[str] = "2.3"
 
-        class V10(DoubleTool):
+        class V10(CountingTool):
             version: ClassVar[str] = "10.0"
 
-        registry.register(DoubleTool())
+        registry.register(CountingTool())
         registry.register(V2())
         registry.register(V10())
-        assert registry.resolve("test.double").version == "10.0"
-        assert registry.resolve("test.double", "2.3").version == "2.3"
+        assert registry.resolve("test.counting").version == "10.0"
+        assert registry.resolve("test.counting", "2.3").version == "2.3"
 
     def test_versions_are_compared_as_numbers_not_strings(self) -> None:
         """``"10.0" < "9.0"`` lexicographically, which would silently resolve backwards."""
@@ -234,15 +254,15 @@ class TestRegistry:
 
     def test_registering_the_same_name_and_version_twice_is_refused(self) -> None:
         registry = ToolRegistry()
-        registry.register(DoubleTool())
+        registry.register(CountingTool())
         with pytest.raises(ToolError) as raised:
-            registry.register(DoubleTool())
+            registry.register(CountingTool())
         assert raised.value.code == "DUPLICATE_TOOL"
 
     def test_a_tool_declaring_no_name_is_refused_at_registration(self) -> None:
         """The failure names the class, instead of surfacing as an AttributeError."""
 
-        class Nameless(DoubleTool):
+        class Nameless(CountingTool):
             name = None  # type: ignore[assignment]
 
         with pytest.raises(ToolError) as raised:
@@ -264,7 +284,10 @@ class TestRegistry:
         specs = build_registry().describe()
         assert [spec.name for spec in specs] == [
             "finance.reconciliation",
+            "finance.refund_analysis",
             "finance.revenue_analysis",
+            "payments.failure_analysis",
+            "risk.chargeback_analysis",
         ]
         assert build_registry().describe() == specs
 
@@ -329,3 +352,98 @@ class TestRevenueInput:
                     "method": "UPI",
                 }
             )
+
+
+# --------------------------------------------------------------------------
+# the metric vocabulary, enforced at import
+# --------------------------------------------------------------------------
+
+
+class TestVocabularyEnforcement:
+    """The Phase 4 exit criterion: an unregistered metric id cannot ship."""
+
+    def test_a_tool_publishing_an_unregistered_metric_fails_at_class_creation(self) -> None:
+        with pytest.raises(UnregisteredMetricError, match="invented_thing_paise"):
+
+            class Inventive(CountingTool):
+                metrics: ClassVar[tuple[str, ...]] = ("invented_thing_paise",)
+
+    def test_a_metric_id_with_no_unit_suffix_is_refused(self) -> None:
+        """C-04: the suffix is what stops a ratio being rendered as money."""
+        with pytest.raises(UnregisteredMetricError):
+
+            class Unsuffixed(CountingTool):
+                metrics: ClassVar[tuple[str, ...]] = ("revenue",)
+
+    def test_a_tool_publishing_only_registered_metrics_is_fine(self) -> None:
+        class Fine(CountingTool):
+            metrics: ClassVar[tuple[str, ...]] = ("exception_count", "ledger_count")
+
+        assert Fine.metric_units() == {"exception_count": "count", "ledger_count": "count"}
+
+    def test_every_registered_tool_publishes_only_registered_metrics(self) -> None:
+        for spec in build_registry().describe():
+            assert set(spec.metrics) <= set(METRICS), spec.name
+
+    def test_the_vocabulary_has_no_metric_nobody_publishes(self) -> None:
+        """An entry no tool emits is a promise the system does not keep."""
+        published = {
+            metric_id for spec in build_registry().describe() for metric_id in spec.metrics
+        }
+        assert set(METRICS) - published == set()
+
+    def test_evidence_cannot_publish_an_unregistered_metric(self) -> None:
+        with pytest.raises(ValidationError, match="not in the vocabulary"):
+            _evidence(metric_id="invented_thing_paise", unit="paise", value=1)
+
+    def test_evidence_cannot_publish_a_metric_under_the_wrong_unit(self) -> None:
+        """A ratio published as a percentage point renders as a plausible lie."""
+        with pytest.raises(ValidationError, match="declares 'ratio'"):
+            _evidence(metric_id="success_rate_ratio", unit="pp", value=Decimal("0.94"))
+
+    def test_a_dimensioned_metric_must_name_its_slice(self) -> None:
+        with pytest.raises(ValidationError, match="names no method"):
+            _evidence(metric_id="by_method.attempt_count", unit="count", value=3)
+
+    def test_an_undimensioned_metric_must_not_name_one(self) -> None:
+        with pytest.raises(ValidationError, match="not measured over a dimension"):
+            _evidence(metric_id="attempt_count", unit="count", value=3, dimension_value="UPI")
+
+    def test_a_slice_outside_the_declared_values_is_refused(self) -> None:
+        """There are four rails. "upi" is not one of them, and neither is "CRYPTO"."""
+        with pytest.raises(ValidationError, match="is not a method"):
+            _evidence(
+                metric_id="by_method.attempt_count",
+                unit="count",
+                value=3,
+                dimension_value="CRYPTO",
+            )
+
+    def test_the_unit_of_every_registered_metric_is_derivable(self) -> None:
+        for metric_id in METRICS:
+            assert unit_for(metric_id) in {"paise", "ratio", "pp", "count"}
+
+    def test_pp_beats_change_when_reading_the_suffix(self) -> None:
+        """``success_rate_pp_change`` is percentage points, not a bare change."""
+        assert unit_for("success_rate_pp_change") == "pp"
+        assert unit_for("net_revenue_change_paise") == "paise"
+
+
+def _evidence(
+    metric_id: str, unit: str, value: int | Decimal, dimension_value: str | None = None
+) -> Evidence:
+    return Evidence(
+        id="e",
+        execution_id="x",
+        tool_name="t",
+        tool_version="1.0",
+        metric_id=metric_id,
+        unit=unit,  # type: ignore[arg-type]
+        value=value,
+        period_from="2026-08-01",
+        period_to="2026-08-24",
+        dimension_value=dimension_value,
+        aggregation=Aggregation(
+            operation="COUNT", field_name="id", over="t", predicate="p", unit="count"
+        ),
+    )
