@@ -15,6 +15,7 @@ design (D-12) and an execution lives entirely inside one process.
 """
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID, uuid4
@@ -53,9 +54,17 @@ class RecordedEvent:
 
 @dataclass
 class EventLog:
-    """One execution's events, in order."""
+    """One execution's events, in order.
+
+    ``on_event`` is how a live SSE subscriber sees a stage before the stage
+    commits. It is a plain callback rather than an import of the broadcaster so
+    that this module -- which every execution depends on -- stays ignorant of
+    delivery, and so the dependency runs one way when the broadcaster is
+    replaced by a message bus (D-12).
+    """
 
     execution_id: UUID
+    on_event: Callable[[UUID, RecordedEvent], None] | None = None
     _next: int = 0
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _recorded: list[RecordedEvent] = field(default_factory=list)
@@ -84,4 +93,9 @@ class EventLog:
             )
         )
         self._recorded.append(event)
+        if self.on_event is not None:
+            # After the INSERT, so nothing is announced that was not written,
+            # and before the commit, so a ninety-second DAG is not a
+            # ninety-second silence.
+            self.on_event(self.execution_id, event)
         return event

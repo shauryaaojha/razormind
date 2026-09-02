@@ -19,6 +19,7 @@ explanation *entirely*, and a reader who asks anyway is told why rather than
 handed the support for a number nobody verified.
 """
 
+from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -36,7 +37,7 @@ from provenance.builder import (
     walk,
 )
 from runtime.db import connection
-from verification.repository import read_execution
+from verification.repository import list_executions, read_execution
 
 __all__ = ["router"]
 
@@ -77,6 +78,27 @@ class ExecutionSummary(BaseModel):
     claims: list[AnswerClaim]
     grounding_attempts: int
     error: dict[str, Any] | None
+
+
+class ExecutionLine(BaseModel):
+    """One row of the history list. The question, and how it ended."""
+
+    execution_id: str
+    merchant_id: str
+    question: str
+    status: str
+    response_source: str | None
+    created_at: str
+    period_from: str | None
+    period_to: str | None
+
+
+class ExecutionPage(BaseModel):
+    items: list[ExecutionLine]
+    #: The ``created_at`` of the last item, to pass back as ``cursor``. Keyset
+    #: rather than an offset: rows are inserted while somebody is paging, and an
+    #: offset shows a row twice or skips one.
+    next_cursor: str | None
 
 
 class EvidenceLine(BaseModel):
@@ -155,6 +177,38 @@ def _error(
     return HTTPException(
         status_code=status,
         detail={"error": {"code": code, "message": message, "detail": detail or {}}},
+    )
+
+
+@router.get("", response_model=ExecutionPage)
+async def list_history(
+    merchant_id: str,
+    status: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    cursor: datetime | None = None,
+) -> ExecutionPage:
+    """Newest first. What the history page renders before anything is opened."""
+    async with connection() as conn:
+        rows = await list_executions(conn, merchant_id, status=status, limit=limit, cursor=cursor)
+    return ExecutionPage(
+        items=[
+            ExecutionLine(
+                execution_id=str(row.id),
+                merchant_id=row.merchant_id,
+                question=row.question,
+                status=row.status,
+                response_source=row.response_source,
+                created_at=row.created_at.isoformat() if row.created_at else "",
+                period_from=row.period_from.isoformat() if row.period_from else None,
+                period_to=row.period_to.isoformat() if row.period_to else None,
+            )
+            for row in rows
+        ],
+        next_cursor=(
+            rows[-1].created_at.isoformat()
+            if len(rows) == limit and rows and rows[-1].created_at
+            else None
+        ),
     )
 
 

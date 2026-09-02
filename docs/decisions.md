@@ -967,3 +967,84 @@ spellings that lose no digit, from one list.
 
 **Cost to reverse.** Low mechanically. The reason not to is that the arrangement is what makes
 "the numbers never depend on a third party" checkable rather than asserted.
+
+---
+
+### D-51 — The event stream subscribes before it replays, and deduplicates on `seq`
+
+**Decision.** `GET /agent/runs/{id}/events` attaches to the in-process broadcaster *first*, then
+reads `execution_events` from the requested sequence, then follows the live queue. Anything
+arriving on both paths is dropped by sequence number.
+
+**Why.** Two sources are unavoidable and each one alone is wrong.
+
+The table is the truth — append-only, monotonically sequenced, and the reason a finished run and a
+live one are the same rendering rather than two. But a stage's rows are not *visible* until the
+stage's transaction commits, and the executing stage is the ninety-second one. A stream that read
+only the table would show nothing during the DAG and everything at the end, which is exactly the
+blocking design [C-14](00-corrections.md#c-14-m--a-synchronous-endpoint-cannot-drive-the-progressive-ui)
+replaced.
+
+The broadcaster alone is worse: it has no history, so a client that connects a second late has
+missed the beginning permanently, and `Last-Event-ID` would have nothing to resume from.
+
+The *ordering* is the part that is easy to get backwards. Reading first and subscribing second
+loses every event written in between, and the gap is invisible — the client sees `…, 4, 7, 8, …`
+and has no way to know 5 and 6 existed. Subscribing first can only produce duplicates, and a
+duplicate is detectable: `seq` is monotonic, so the follower drops anything at or below what the
+replay already emitted. **Prefer the failure you can detect.**
+
+**Cost to reverse.** Low. When a second worker arrives (the D-12 trigger), the broadcaster becomes
+a Redis subscription and nothing above it changes, because the durable log is already there.
+
+---
+
+### D-52 — Identity is a header until the JWT lands; the merchant is checked either way
+
+**Decision.** `POST /agent/runs` reads the caller from `X-RazorMind-User` and resolves the role
+from `merchant_members`. A non-member gets `403 MERCHANT_SCOPE_VIOLATION` before any row is
+written; a `VIEWER` gets `403 INSUFFICIENT_PERMISSION`. There is no JWT yet.
+
+**Why.** Two halves of authentication, and only one of them was available.
+
+The half that could be built is the half [C-13](00-corrections.md#c-13-b--agentexecution-and-the-api-cannot-scope-to-a-merchant)
+is about: the merchant in the request body is *validated against* the caller's memberships rather
+than trusted for scoping. That check is real, it is tested, and it is what stops one tenant asking
+about another's money.
+
+The half that could not is proof that the header is who it claims. That needs Supabase issuing and
+signing tokens, which is a Phase 12 deployment concern.
+
+The alternative was to invent a local auth scheme — sessions, a signing key, a login page — and
+throw it away in Phase 12. The cost of that is not the wasted work, it is that a hand-rolled auth
+scheme built to be discarded is the kind of thing that survives, because it looks finished.
+
+So the gap is stated in the module docstring, in the API doc, and here, and the swap is one
+function: `_caller()` verifies a JWT instead of parsing a header, and `_membership()` does not
+change at all.
+
+**Cost to reverse.** Low, and the trigger is Phase 12.
+
+---
+
+### D-53 — The TypeScript contract is generated, and both halves are diffed in CI
+
+**Decision.** `scripts/export_openapi.py` writes `packages/shared-types/openapi.json` *and*
+`packages/shared-types/api.ts`. `task.py check` fails if either differs from what the app
+produces. The generator raises on a schema shape it does not handle rather than emitting `any`.
+
+**Why.** A generated file that is not diffed in CI is wrong within a fortnight: the endpoint
+changes, the client keeps its old types, and the mismatch surfaces as an `undefined` in a browser
+rather than as a red build. The diff is the whole value; the generation is the easy part.
+
+Generating the TypeScript, rather than writing it beside the document, is the same argument one
+level down. A hand-kept mirror of a generated file is a second source of truth that nobody notices
+going stale — and it goes stale in the direction that matters, because the person adding a field
+to the API is not the person reading the client.
+
+Refusing an unknown schema shape is the part worth defending. Emitting `any` would keep the
+generator running and quietly stop the contract being one; a build failure names the shape and
+takes ten minutes to support.
+
+**Cost to reverse.** Low. A fuller generator (`openapi-typescript`) is a drop-in replacement, and
+the CI gate that makes it worth having is already the part that exists.

@@ -52,7 +52,7 @@ before anything non-deterministic touches it.
 ------------------------------------------------------------------  first LLM call
  6  Agent runtime       intent, plan, validate, execute, state    [DONE]
  7  Explainer           grounding, template fallback              [DONE]
- 8  API surface         SSE streaming, OpenAPI contract
+ 8  API surface         SSE streaming, OpenAPI contract           [DONE]
  9  Web application     chat, dashboard, exceptions, provenance
 10  Failure & recovery  fault injection, graceful degradation
 11  Evaluation          intent/tool/computation/grounding accuracy
@@ -183,9 +183,10 @@ image, which is why "works on my machine" and "passes CI" are not separate claim
 
 ## Status
 
-**Phases 0 through 7 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
-contracts, the no-float guard, the ten fixture assertions, and 396 tests with 100% branch
-coverage on `runtime/`. A further 106 integration tests run against a real Postgres.
+**Phases 0 through 8 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
+contracts, the no-float guard, the OpenAPI contract diff, the ten fixture assertions, and 396
+tests with 100% branch coverage on `runtime/`. A further 121 integration tests run against a real
+Postgres.
 
 The three boundary mechanisms exist before any domain logic does, which is the point of the phase:
 
@@ -606,9 +607,63 @@ the moment it is needed ([D-50](docs/decisions.md#d-50--the-template-renderer-si
 If the template itself ever failed grounding, the run fails. There is no floor below a
 deterministic render of verified rows, and unchecked prose is not one.
 
-**Next: Phase 8 — the API surface.** `POST /agent/runs` with idempotency, the SSE event stream that
-replays `execution_events` so a finished run and a live one render through one component, and an
-OpenAPI contract diffed in CI.
+Phase 8 put all of it behind an API a browser can drive.
+
+```text
+POST /api/v1/agent/runs             202  { execution_id, status: "PENDING", replayed: false }
+GET  /api/v1/agent/runs/{id}/events      text/event-stream, resumable
+GET  /api/v1/executions/{id}             the record, the answer, the claims
+GET  /api/v1/executions?merchant_id=     history, newest first, keyset-paginated
+```
+
+### Subscribe, then replay
+
+The stream has two sources and needs both. `execution_events` is the truth — append-only,
+sequenced, and the reason a finished run and a live one are the *same* rendering rather than two.
+But a stage's rows are invisible until the stage commits, and the executing stage is the long one,
+so live delivery comes from an in-process broadcaster the event log publishes to as each row is
+written.
+
+The ordering is the part that is easy to get backwards:
+
+```text
+read then subscribe  ->  events written in between reach nobody   (a gap, undetectable)
+subscribe then read  ->  events arrive twice                      (a duplicate, detectable)
+```
+
+So it subscribes first and drops anything at or below what the replay already emitted. `seq` is
+monotonic, so `Last-Event-ID: 7` yields exactly `8, 9, 10, …` — no gap, no repeat. **Prefer the
+failure you can detect.**
+
+The progressive-delivery test drives the stream generator directly rather than going over HTTP,
+because httpx's ASGI transport runs an app to completion and hands back the collected body: a test
+through it could prove the frames were right and never that any of them arrived while the run was
+still going, which is the entire point.
+
+### Idempotency, and a row that exists before the response
+
+`client_request_id` is an idempotency key with a unique constraint behind it. Chat clients retry,
+and a finance investigation should not silently happen twice. The execution row is inserted
+*before* the 202 rather than by the background task, so a client that polls the id it was just
+handed finds something there.
+
+### A contract that cannot go stale quietly
+
+`packages/shared-types/openapi.json` and `api.ts` are both generated from the running app, and
+`check` fails if either differs. The TypeScript is generated rather than hand-mirrored for the
+same reason: the person adding a field to the API is not the person reading the client. The
+generator refuses a schema shape it does not understand instead of emitting `any`, because `any`
+is how a contract stops being one.
+
+### What auth is, and what it is not
+
+The membership check is real: the role comes from `merchant_members`, a caller who is not a member
+of the merchant in the body gets `403` before a row is written, and a `VIEWER` cannot start a run.
+What is missing is proof that the caller header is genuine — that is the JWT, and it changes one
+function ([D-52](docs/decisions.md#d-52--identity-is-a-header-until-the-jwt-lands-and-the-merchant-is-checked-either-way)).
+An unauthenticated endpoint that looks authenticated is worse than one that says it is not.
+
+**Next: Phase 9 — the web application**, built on Razorpay's own design system.
 
 ---
 

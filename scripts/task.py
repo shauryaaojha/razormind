@@ -163,6 +163,16 @@ def nofloat() -> int:
     return _run("scripts/check_no_float.py")
 
 
+def openapi() -> int:
+    """Regenerate packages/shared-types/openapi.json from the app."""
+    return _run("scripts/export_openapi.py")
+
+
+def openapi_check() -> int:
+    """Fail if the committed OpenAPI document no longer matches the app."""
+    return _run("scripts/export_openapi.py", "--check")
+
+
 def seed() -> int:
     """Regenerate the fixture: both CSVs, seed.sql, expectations and checksums."""
     return _run("data/seed/generate_seed_data.py")
@@ -223,7 +233,7 @@ def dbtest() -> int:
 
 def check() -> int:
     """Everything CI runs, in CI's order. The Phase 0 exit criterion."""
-    for step in (lint, types, boundaries, nofloat, verify_seed, test):
+    for step in (lint, types, boundaries, nofloat, openapi_check, verify_seed, test):
         code = step()
         if code != 0:
             print(f"\n>>> {step.__name__} FAILED (exit {code})", file=sys.stderr)
@@ -245,6 +255,8 @@ TARGETS: dict[str, Callable[[], int]] = {
     "types": types,
     "boundaries": boundaries,
     "nofloat": nofloat,
+    "openapi": openapi,
+    "openapi-check": openapi_check,
     "seed": seed,
     "verify-seed": verify_seed,
     "migrate": migrate,

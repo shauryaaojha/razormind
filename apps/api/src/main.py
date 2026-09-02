@@ -8,7 +8,7 @@ be discovered under load.
 
 from fastapi import APIRouter, FastAPI
 
-from routes import executions, health, provenance, reconciliation
+from routes import agent, executions, health, provenance, reconciliation
 
 __all__ = ["API_PREFIX", "app", "create_app"]
 
@@ -32,6 +32,7 @@ def create_app() -> FastAPI:
 
     v1 = APIRouter(prefix=API_PREFIX)
     v1.include_router(health.router)
+    v1.include_router(agent.router)
     v1.include_router(reconciliation.router)
     v1.include_router(executions.router)
     v1.include_router(provenance.router)

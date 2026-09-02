@@ -21,6 +21,7 @@ persisted, each carrying no prose. The only path to `COMPLETED` runs through
 verification.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -45,7 +46,7 @@ from verification.repository import open_execution, record_verification
 from verification.sources import DatabaseSources
 from verification.verifier import ToolOutcome, VerificationReport, verify_execution
 
-from .events import EventLog
+from .events import EventLog, RecordedEvent
 from .executor import ExecutionOutcome, execute_plan
 from .planner import PlanningError, build_plan
 from .state import StateMachine
@@ -99,19 +100,30 @@ async def answer(
     role: Role = "ANALYST",
     registry: ToolRegistry = REGISTRY,
     execution_id: UUID | None = None,
+    reserved: bool = False,
+    on_event: Callable[[UUID, RecordedEvent], None] | None = None,
 ) -> AgentRun:
-    """Run one question all the way to a verified state, or to the state that stopped it."""
+    """Run one question all the way to a verified state, or to the state that stopped it.
+
+    ``reserved`` says the row already exists. The API inserts it before
+    returning ``202 Accepted`` -- a client that polls the id it was just handed
+    must find something there -- and this function then continues an execution
+    rather than opening one. Two inserts of the same primary key would be a
+    crash; skipping the insert unconditionally would leave every other caller
+    without a row.
+    """
     identifier = execution_id or uuid4()
-    log = EventLog(identifier)
+    log = EventLog(identifier, on_event=on_event)
 
     async with connection() as conn:
-        await open_execution(
-            conn,
-            execution_id=identifier,
-            user_id=user_id,
-            merchant_id=merchant_id,
-            question=question,
-        )
+        if not reserved:
+            await open_execution(
+                conn,
+                execution_id=identifier,
+                user_id=user_id,
+                merchant_id=merchant_id,
+                question=question,
+            )
         await log.append(conn, "execution.created", {"question": question})
         machine = StateMachine(identifier, log)
 

@@ -119,8 +119,9 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 | 5 — Trust layer | **Done.** Five verification layers, cross-tool consistency, evidence persistence, provenance walk, `GET /executions/{id}/evidence/{evidence_id}`. 304 + 88 tests |
 | 6 — Agent runtime | **Done.** Intent parser + confidence gate, deterministic planner, eleven validation gates, concurrent DAG executor, nine-state machine, event log. 359 + 104 tests |
 | 7 — Explainer | **Done.** Five grounding checks, byte-match on value *and* prose, regenerate-once, deterministic template below the model boundary, answer persisted. 396 + 106 tests |
-| 8 — API surface | next. SSE, idempotency, OpenAPI gate |
-| 9–12 | not started |
+| 8 — API surface | **Done.** `POST /agent/runs` (202 + idempotency), resumable SSE, history listing, generated OpenAPI + TypeScript contract diffed in CI. 396 + 121 tests |
+| 9 — Web application | next. Chat, dashboard, exceptions, provenance drawer |
+| 10–12 | not started |
 
 ### Notes from Phase 0 worth not rediscovering
 
@@ -368,3 +369,25 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 - **Scripted providers refuse the explanation call** (`ask.py`, `test_agent_db.py`): scripting a
   grounded answer over 123 real evidence rows would mean writing the explainer in the test.
   Refusing exercises the template path, which is what a deployment with no key does anyway.
+
+### Notes from Phase 8 worth not rediscovering
+
+- **Subscribe to the broadcaster BEFORE reading the log.** Read-then-subscribe loses whatever
+  is written in between and the gap is undetectable; subscribe-then-read only duplicates, and
+  a duplicate is detectable by `seq`.
+  → [D-51](docs/decisions.md#d-51--the-event-stream-subscribes-before-it-replays-and-deduplicates-on-seq)
+- **httpx's `ASGITransport` buffers the whole response.** It runs the app to completion and
+  hands back the collected body, so nothing measured through it can tell a streaming endpoint
+  from a buffering one. The progressive test drives `event_frames` directly.
+- **The stream does not poll `request.is_disconnected()`.** The ASGI server cancels the
+  generator on disconnect, earlier and more reliably; and under `ASGITransport` the check
+  returns true immediately and kills the stream.
+- **`open_execution` inserts `PENDING` and the route calls it before returning 202.** The
+  runtime takes `reserved=True` to continue rather than open. Two inserts of one primary key
+  is a crash; skipping the insert unconditionally leaves every other caller rowless.
+- **Auth is deliberately half-built and says so** in three places. The membership check is
+  real; the header's authenticity is not proven until the JWT.
+  → [D-52](docs/decisions.md#d-52--identity-is-a-header-until-the-jwt-lands-and-the-merchant-is-checked-either-way)
+- **`task.py openapi` regenerates `openapi.json` AND `api.ts`;** `check` diffs both. The TS
+  generator raises on an unknown schema shape rather than emitting `any`.
+  → [D-53](docs/decisions.md#d-53--the-typescript-contract-is-generated-and-both-halves-are-diffed-in-ci)

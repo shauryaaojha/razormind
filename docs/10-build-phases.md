@@ -267,6 +267,26 @@ and nowhere to put the text they describe
 - Replaying the same `client_request_id` returns the original `execution_id`
 - Regenerated OpenAPI matching the committed file is a CI gate
 
+All four hold, in `tests/test_api_db.py` and in `check`'s `openapi-check` step. Three notes:
+
+**The progressive test drives the stream generator directly, not the HTTP client.** httpx's ASGI
+transport runs an app to completion and hands back the collected body, so a test through it could
+prove the frames were right and never that any of them arrived while the run was still going —
+which is the whole of [C-14](00-corrections.md). It records the arrival time of every frame and
+asserts the last is more than a tenth of a second after the first, on a run that takes about
+one and a quarter.
+
+**Live delivery needed an in-process broadcaster.** Events are durable in `execution_events`, but a
+stage's rows are invisible until the stage commits, and a client watching a ninety-second DAG
+through one commit boundary sees nothing and then everything. The log stays the source of truth;
+the broadcaster is delivery
+([D-51](decisions.md#d-51--the-event-stream-subscribes-before-it-replays-and-deduplicates-on-seq)).
+
+**Auth is half-done and says so.** The membership check is real and tested — a foreign merchant is
+`403` before any row is written, and a `VIEWER` cannot start a run. What is missing is proof that
+the caller header is genuine, which is the JWT
+([D-52](decisions.md#d-52--identity-is-a-header-until-the-jwt-lands-and-the-merchant-is-checked-either-way)).
+
 ---
 
 ## Phase 9 — Web application
