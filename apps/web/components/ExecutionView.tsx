@@ -3,18 +3,9 @@
 /**
  * One execution, rendered. The **only** component that renders one.
  *
- * The chat page passes events arriving over the stream; the history page
- * passes events replayed from the same endpoint. Neither knows which it is,
- * because there is nothing to know: `execution_events` is append-only and
- * sequenced, so a run watched live and the same run read an hour later are the
- * same list of rows. `tests/execution-view.test.tsx` asserts the two produce
- * byte-identical markup — which is a property to hold rather than a
- * coincidence to notice.
- *
  * Everything a number needs to be believed is here: the stages that produced
  * it, the verification that cleared it, and a claim that opens onto the
- * evidence. Nothing here formats money; every figure arrives already written
- * by `narrative/render.py` (D-54).
+ * evidence.
  */
 
 import {
@@ -28,8 +19,11 @@ import {
   Spinner,
   Text,
 } from "@razorpay/blade/components";
+import { CheckCircle2, Clock, Cpu, ExternalLink, HelpCircle, ShieldAlert, ShieldCheck, Sparkles, XCircle } from "lucide-react";
 import type { AnswerClaim, ExecutionSummary } from "@shared/api";
+import React from "react";
 
+import { useAppTheme } from "@/app/providers";
 import { Clickable } from "@/components/Clickable";
 import type { TraceEvent } from "@/lib/stream";
 import { questionOf, stagesOf, statusOf, toolsOf, type StageStatus } from "@/lib/trace";
@@ -56,39 +50,49 @@ const TOOL_BADGE: Record<string, "positive" | "negative" | "notice" | "neutral">
 };
 
 export function ExecutionView({ events, summary, onInspect }: ExecutionViewProps) {
+  const { isDark } = useAppTheme();
   const stages = stagesOf(events);
   const tools = toolsOf(events);
   const status = statusOf(events);
   const question = questionOf(events);
 
   return (
-    <Box display="flex" flexDirection="column" gap="spacing.5" testID="execution-view">
+    <Box testID="execution-view" display="flex" flexDirection="column" gap="spacing.5">
+      {/* Question Card */}
       {question ? (
-        <Card padding="spacing.5" elevation="lowRaised">
+        <Card padding="spacing.4" elevation="lowRaised">
           <CardBody>
-            <Text size="small" color="surface.text.gray.muted">
-              Question
-            </Text>
-            <Text weight="semibold">{question}</Text>
+            <Box display="flex" flexDirection="column" gap="spacing.2">
+              <Text size="small" color="surface.text.gray.muted">
+                Active Investigation Query
+              </Text>
+              <Text weight="semibold" size="medium">
+                {question}
+              </Text>
+            </Box>
           </CardBody>
         </Card>
       ) : null}
 
+      {/* Trace Stepper Card */}
       <Card padding="spacing.5" elevation="lowRaised">
         <CardBody>
           <Box display="flex" flexDirection="column" gap="spacing.4">
-            <Box display="flex" alignItems="center" gap="spacing.3">
-              <Heading size="small">Trace</Heading>
+            <Box display="flex" alignItems="center" justifyContent="space-between">
+              <Box display="flex" alignItems="center" gap="spacing.3">
+                <Heading size="small">Live Deterministic Execution Pipeline</Heading>
+              </Box>
               <Badge color={status === "COMPLETED" ? "positive" : "neutral"}>{status}</Badge>
             </Box>
 
+            {/* Stages list */}
             {stages.map((stage) => (
               <Box
                 key={stage.id}
+                testID={`stage-${stage.id}`}
                 display="flex"
                 alignItems="center"
                 gap="spacing.3"
-                testID={`stage-${stage.id}`}
               >
                 {stage.status === "running" ? (
                   <Spinner accessibilityLabel={`${stage.label} in progress`} size="medium" />
@@ -108,18 +112,22 @@ export function ExecutionView({ events, summary, onInspect }: ExecutionViewProps
               </Box>
             ))}
 
+            {/* Tools breakdown */}
             {tools.length > 0 ? (
               <>
                 <Divider />
                 <Box display="flex" flexDirection="column" gap="spacing.2">
+                  <Text size="small" weight="semibold" color="surface.text.gray.muted">
+                    Tools Executed in DAG
+                  </Text>
                   {tools.map((tool) => (
                     <Box
                       key={tool.node}
+                      testID={`tool-${tool.node}`}
                       display="flex"
                       alignItems="center"
                       justifyContent="space-between"
                       gap="spacing.3"
-                      testID={`tool-${tool.node}`}
                     >
                       <Box display="flex" alignItems="center" gap="spacing.3">
                         <Badge color={TOOL_BADGE[tool.status] ?? "neutral"}>{tool.status}</Badge>
@@ -152,8 +160,6 @@ function Answer({
   if (!summary) return null;
 
   if (summary.status === "BLOCKED") {
-    // Invariant 4, on screen: a verification failure carries no numbers at all.
-    // A partial figure with a warning beside it is what this exists to prevent.
     return (
       <Alert
         isFullWidth
@@ -185,12 +191,16 @@ function Answer({
     <Card padding="spacing.5" elevation="lowRaised">
       <CardBody>
         <Box display="flex" flexDirection="column" gap="spacing.4">
-          <Box display="flex" alignItems="center" gap="spacing.3">
-            <Heading size="small">Answer</Heading>
-            <Badge color={summary.response_source === "LLM" ? "information" : "neutral"}>
-              {summary.response_source === "LLM" ? "written by the model" : "template"}
-            </Badge>
-            <Badge color="positive">{summary.claims.length} grounded claims</Badge>
+          <Box display="flex" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap="spacing.3">
+            <Box display="flex" alignItems="center" gap="spacing.3">
+              <Heading size="small">Grounded Financial Answer</Heading>
+            </Box>
+            <Box display="flex" gap="spacing.2">
+              <Badge color={summary.response_source === "LLM" ? "information" : "neutral"}>
+                {summary.response_source === "LLM" ? "written by the model" : "template"}
+              </Badge>
+              <Badge color="positive">{summary.claims.length} grounded claims</Badge>
+            </Box>
           </Box>
 
           <GroundedText answer={summary.answer} claims={summary.claims} onInspect={onInspect} />
@@ -200,13 +210,6 @@ function Answer({
   );
 }
 
-/**
- * The answer, with every claimed span made clickable.
- *
- * The spans are the ones the grounding gate matched — the client does not scan
- * the prose for anything that looks like a number. A figure is clickable
- * because it was proved, not because it was recognised.
- */
 export function GroundedText({
   answer,
   claims,
@@ -243,7 +246,7 @@ export function GroundedText({
                 {segment.text}
               </Text>
               <Text size="xsmall" color="interactive.text.primary.normal">
-                evidence
+                evidence ↗
               </Text>
             </Box>
           </Clickable>
@@ -259,14 +262,6 @@ export function GroundedText({
 
 type Segment = { text: string; claim: AnswerClaim | null };
 
-/**
- * Split the answer into claimed and unclaimed runs.
- *
- * Claims are located by searching for their own text, the same way the server
- * does when it checks them. Overlaps are resolved by taking the earliest, then
- * the longest — a span inside another span is the same figure twice, and
- * rendering it twice would put a button inside a button.
- */
 export function splitByClaims(answer: string, claims: AnswerClaim[]): Segment[] {
   const found = claims
     .map((claim) => ({ claim, at: answer.indexOf(claim.text) }))

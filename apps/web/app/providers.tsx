@@ -1,27 +1,74 @@
 "use client";
 
-/**
- * Blade, wired once.
- *
- * The whole interface is Razorpay's own design system: `bladeTheme` tokens,
- * Blade components, Blade spacing. Nothing here defines a colour, a radius or a
- * font size of its own, and that is deliberate — a finance console that invents
- * its own visual language is one more thing a reader has to learn before they
- * can trust what it says.
- */
-
 import { BladeProvider } from "@razorpay/blade/components";
 import { bladeTheme } from "@razorpay/blade/tokens";
 import type { ReactNode } from "react";
+import React, { createContext, useContext, useEffect, useState } from "react";
 
+import { AnimatedBackground } from "@/components/AnimatedBackground";
 import { StyledComponentsRegistry } from "./registry";
 
+type ColorScheme = "dark" | "light";
+
+interface ThemeContextType {
+  colorScheme: ColorScheme;
+  toggleTheme: () => void;
+  setTheme: (theme: ColorScheme) => void;
+  isDark: boolean;
+}
+
+const ThemeContext = createContext<ThemeContextType>({
+  colorScheme: "dark",
+  toggleTheme: () => undefined,
+  setTheme: () => undefined,
+  isDark: true,
+});
+
+export function useAppTheme() {
+  return useContext(ThemeContext);
+}
+
 export function Providers({ children }: { children: ReactNode }) {
+  const [colorScheme, setColorScheme] = useState<ColorScheme>("dark");
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+    const saved = localStorage.getItem("razormind-theme") as ColorScheme | null;
+    if (saved === "light" || saved === "dark") {
+      setColorScheme(saved);
+    }
+  }, []);
+
+  const setTheme = (scheme: ColorScheme) => {
+    setColorScheme(scheme);
+    localStorage.setItem("razormind-theme", scheme);
+  };
+
+  const toggleTheme = () => {
+    setTheme(colorScheme === "dark" ? "light" : "dark");
+  };
+
+  const isDark = colorScheme === "dark";
+
   return (
-    <StyledComponentsRegistry>
-      <BladeProvider themeTokens={bladeTheme} colorScheme="light">
-        {children}
-      </BladeProvider>
-    </StyledComponentsRegistry>
+    <ThemeContext.Provider value={{ colorScheme, toggleTheme, setTheme, isDark }}>
+      <StyledComponentsRegistry>
+        <BladeProvider themeTokens={bladeTheme} colorScheme={colorScheme}>
+          <div
+            style={{
+              minHeight: "100vh",
+              backgroundColor: isDark ? "#080B11" : "#F8FAFC",
+              color: isDark ? "#F1F5F9" : "#0F172A",
+              transition: "background-color 0.3s ease, color 0.3s ease",
+              position: "relative",
+            }}
+          >
+            {mounted && <AnimatedBackground isDark={isDark} />}
+            <div style={{ position: "relative", zIndex: 1 }}>{children}</div>
+          </div>
+        </BladeProvider>
+      </StyledComponentsRegistry>
+    </ThemeContext.Provider>
   );
 }
