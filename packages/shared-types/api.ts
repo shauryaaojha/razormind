@@ -27,6 +27,7 @@ export interface EvidenceDetail {
   metric_id: string;
   unit: string;
   value: number | string;
+  display: string;
   period_from: string;
   period_to: string;
   dimension_value: string | null;
@@ -49,6 +50,7 @@ export interface EvidenceLine {
   metric_id: string;
   unit: string;
   value: number | string;
+  display: string;
   period_from: string;
   period_to: string;
   dimension_value: string | null;
@@ -151,6 +153,7 @@ export interface ProvenanceLevel {
   metric_id: string;
   unit: string;
   value: number | string;
+  display: string;
   period_from: string;
   period_to: string;
   dimension_value: string | null;
@@ -165,6 +168,7 @@ export interface ProvenanceOperand {
   name: string;
   reference: string;
   value: number | string;
+  display: string;
   node: ProvenanceLevel | null;
 }
 

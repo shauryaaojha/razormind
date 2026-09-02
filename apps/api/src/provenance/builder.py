@@ -37,6 +37,7 @@ from typing import Literal
 
 from evidence.builder import LITERAL, EvidenceSet
 from evidence.models import Evidence
+from evidence.vocabulary import Unit
 
 __all__ = [
     "MAX_DEPTH",
@@ -90,7 +91,11 @@ class ProvenanceNode:
     tool_name: str
     tool_version: str
     metric_id: str
-    unit: str
+    #: The vocabulary's unit, not a free string. The drawer renders a node
+    #: without knowing which metric it is looking at, and it cannot write a
+    #: number down without knowing whether it is money, a ratio, a point or a
+    #: count.
+    unit: Unit
     value: int | Decimal
     period_from: str
     period_to: str

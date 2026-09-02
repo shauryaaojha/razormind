@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     intent_timeout_seconds: int = Field(default=30, ge=1)
     explain_timeout_seconds: int = Field(default=60, ge=1)
 
+    #: Browser origins allowed to call the API. A list rather than ``*``: the
+    #: caller identity travels in a header, and a wildcard origin on an endpoint
+    #: that reads one is an invitation to every other page the user has open.
+    cors_origins: tuple[str, ...] = ("http://localhost:3000", "http://127.0.0.1:3000")
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

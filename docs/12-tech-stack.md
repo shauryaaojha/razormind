@@ -12,7 +12,7 @@ this document fixes the *choices*, and `pyproject.toml` / `package.json` fix the
 
 | Layer | Choice | Host |
 | --- | --- | --- |
-| Web | Next.js (App Router) · React · TypeScript · Tailwind · shadcn/ui | Vercel |
+| Web | Next.js (App Router) · React 18 · TypeScript · **Blade** (`@razorpay/blade`) | Vercel |
 | API | Python 3.13 · FastAPI · Pydantic v2 · asyncio | Railway or Render |
 | Database | PostgreSQL 16 via Supabase, with row-level security | Supabase |
 | Auth | Supabase Auth (JWT) | Supabase |
@@ -215,33 +215,56 @@ explanation, both counted as tool-style failures rather than exceptions.
 
 ## Frontend
 
-### Next.js (App Router) + React + TypeScript
+### Next.js (App Router) + React 18 + TypeScript
 
-Server components for the dashboard and history pages (data-heavy, mostly static per request);
-client components for chat and the provenance drawer (stateful, streaming).
+Client components throughout: every surface here is stateful or streaming — the chat trace, the
+provenance drawer, the dashboard's inspectable tiles — and a server component that has to hand its
+data to a client one immediately is a round trip nobody spends.
 
-TypeScript is `strict`. The API client is **generated** from the committed
-`packages/shared-types/openapi.json`, never hand-written — a CI gate fails the build if the
-regenerated spec differs from the committed one, so the web app cannot drift from the API
-([07-api.md](07-api.md#contract-generation)).
+**React 18, not 19**, because Blade is built on styled-components v5 and v5 does not support React
+19. The design system picks the React version, which is the right direction for that dependency to
+run ([D-55](decisions.md#d-55--the-web-app-is-pinned-to-react-18-because-blade-is)). Next 14
+follows from React 18, and `next.config` is therefore `.mjs` rather than `.ts`.
 
-### Tailwind + shadcn/ui
+TypeScript is `strict` with `noUncheckedIndexedAccess`. The API types are **generated** from the
+committed `packages/shared-types/openapi.json` and imported, never hand-written — `task.py check`
+fails if the regenerated contract differs from the committed one, so the web app cannot drift from
+the API ([D-53](decisions.md#d-53--the-typescript-contract-is-generated-and-both-halves-are-diffed-in-ci)).
 
-shadcn is copied-in components rather than a dependency, which suits a UI with unusual surfaces
-(the recursive evidence renderer, the execution trace) that a component library would fight.
+### Blade — Razorpay's design system
+
+> Supersedes the original Tailwind + shadcn/ui choice. shadcn was picked for a UI with unusual
+> surfaces that a component library "would fight", which turned out to be exactly backwards:
+> Blade has `Drawer`, `Card`, `Badge`, `Alert`, `EmptyState` and `Spinner`, and the two genuinely
+> unusual surfaces — the recursive evidence renderer and the execution trace — are compositions of
+> those, not fights with them.
+
+Nothing in `apps/web` defines a colour, a radius, a font size or a spacing value of its own. The
+one exception is `components/Clickable.tsx`, a `<button>` stripped of its own appearance: Blade's
+`Box` deliberately will not become a button, and a container that could silently be interactive is
+how a div ends up with a click handler and no keyboard access. Everything inside it is still Blade.
+
+Styled-components v5 generates its CSS at render time, so the server stylesheet is collected
+explicitly in `app/registry.tsx`. Without it the server sends correct markup with no styles and the
+page flashes unstyled — on a page of financial figures, a layout that jumps after paint reads as
+numbers that are still loading.
 
 ### Money and ratio rendering
 
-One module, `lib/format.ts`, owns every conversion:
+**There is none in the web app.** Every value the API returns for a metric carries a `display`
+string beside it, written by `narrative/render.py` — the same module the grounding gate
+byte-matches prose against ([D-54](decisions.md#d-54--the-api-serves-the-rendered-figure-the-web-app-formats-nothing)).
 
-- Paise integers → `₹3,90,122.95` with the Indian digit grouping (lakh/crore, not thousands)
-- Ratio strings → percentages, parsed with a decimal library, **never** `parseFloat`
-- Exception enum → display label, the single map from
-  [C-09](00-corrections.md#c-09-m--exception-category-names-are-inconsistent)
+> Supersedes the original `lib/format.ts`. One module owning every conversion was the right
+> instinct and the wrong side of the wire. The server already has that module and it is
+> load-bearing: a TypeScript copy would be a second answer to "what does this number look like",
+> and the two would disagree the first time either was edited. The drift would not even show up on
+> the obvious case — `Intl.NumberFormat("en-IN")` groups Indian digits correctly — it would show up
+> on a scale-6 ratio, where the browser rounds to three fraction digits and prints `95.801%` for a
+> figure the server refuses to let a model call `95.80%`.
 
-Nothing else in the web app formats a number. The Indian grouping is a real requirement, not
-cosmetic — `3,90,122` and `390,122` are the same value written two ways, and a finance user
-reads the first one faster.
+The Indian grouping is a real requirement, not cosmetic — `3,90,122` and `390,122` are the same
+value written two ways, and a finance user reads the first one faster.
 
 ### Streaming
 

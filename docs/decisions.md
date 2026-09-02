@@ -1048,3 +1048,80 @@ takes ten minutes to support.
 
 **Cost to reverse.** Low. A fuller generator (`openapi-typescript`) is a drop-in replacement, and
 the CI gate that makes it worth having is already the part that exists.
+
+---
+
+### D-54 — The API serves the rendered figure; the web app formats nothing
+
+**Decision.** Every value the API returns for a metric carries a `display` string beside it —
+`₹4,06,260.00`, `95.8012%`, `-1.34` — produced by `narrative/render.py`. `apps/web` contains no
+currency, ratio or percentage-point formatting at all.
+
+**Why.** There is exactly one place in this system that decides how a number is written, and it is
+load-bearing in a way a display helper usually is not: the grounding gate *byte-matches* the prose
+against those spellings ([D-11](#d-11--grounding-byte-matches-and-falls-back-to-a-template),
+[D-48](#d-48--grounding-checks-magnitude-and-unit-the-direction-word-goes-unchecked)). A second
+implementation in TypeScript would be a second answer to "what does this number look like", and the
+two would disagree the first time one of them was edited — quietly, because both would keep
+rendering something plausible.
+
+The disagreement would also be in the worst possible place. `Intl.NumberFormat("en-IN")` groups
+Indian digits correctly, so the drift would not show up on ₹4,06,260. It would show up on a
+scale-6 ratio, where the browser's default rounds to three fraction digits and prints `95.801%` for
+a figure the server refuses to let a model call `95.80%`.
+
+So the server sends the string it already computed. The cost is a few bytes per row.
+
+**Cost to reverse.** Low, and the reason not to is that "the number is written one way" stops being
+checkable the moment there are two writers.
+
+---
+
+### D-55 — The web app is pinned to React 18, because Blade is
+
+**Decision.** `apps/web` moves from Next 15 / React 19 to **Next 14.2 / React 18.3**.
+`@razorpay/blade` is the UI, and it declares `styled-components@^5`, which does not support React
+19.
+
+**Why.** Two coherent options, and only one of them is honest about what is being built.
+
+Keeping React 19 would have meant not using Blade — writing a look-alike interface with the same
+spacing and colours and none of the accessibility, keyboard handling or component behaviour that
+makes a design system worth adopting. For a Razorpay-facing product, "we reimplemented Blade" is a
+worse sentence than "we are one React major behind".
+
+So the design system picks the React version. That is the right direction for the dependency to
+run: Blade is the part with an opinion, and the framework is the part that hosts it.
+
+Two consequences worth writing down. Next 14 does not load `next.config.ts`, so the config is
+`.mjs`. And styled-components v5 needs its server stylesheet collected explicitly, which is
+`app/registry.tsx` — without it the server sends correct markup with no styles and the page flashes
+unstyled, which on a page of financial figures reads as numbers that are still loading.
+
+**Trigger to revisit.** Blade moving to styled-components v6. The change is then a version bump and
+deleting the registry.
+
+---
+
+### D-56 — The dashboard is built on evidence, not on the reconciliation table
+
+**Decision.** The reconciliation scorecard renders the **published evidence** of the most recent
+completed execution, not rows from `reconciliation_runs`. The exception explorer still reads the
+reconciliation endpoint.
+
+**Why.** Both hold the same figures. Only one of them carries an evidence id, and a number without
+one cannot be clicked down to the records it came from.
+
+That matters more than it sounds. The exit criterion is "every number in the dashboard is clickable
+down to source records", and the obvious implementation — read `reconciliation_runs`, render seven
+tiles — satisfies every part of it except the clicking. A product where the chat answer is
+inspectable and the dashboard is inert has two standards of proof in one interface, and a reader
+has no way to tell which page they are on.
+
+An exception stays on the reconciliation endpoint because it is not a metric: it is a row with a
+category, an amount, and — for the ones that matter — the candidate the matcher found and
+deliberately refused. `SETTLEMENT_91` at confidence 0.72 is the strongest single thing this system
+can show, and it has no evidence id because it is not a number anybody computed.
+
+**Cost to reverse.** Low. The consequence to keep in mind is that the dashboard is empty until an
+investigation has run, which is correct — there is nothing verified to show before then.

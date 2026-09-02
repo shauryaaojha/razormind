@@ -27,7 +27,20 @@ SRC = ROOT / "apps" / "api" / "src"
 IN_CONTAINER = os.environ.get("RAZORMIND_IN_CONTAINER") == "1"
 
 #: Targets that manage containers and therefore must run on the host.
-HOST_ONLY = {"build", "up", "down", "dev", "web", "psql", "shell"}
+HOST_ONLY = {
+    "build",
+    "up",
+    "down",
+    "dev",
+    "web",
+    # The web targets shell into the node container, so they drive
+    # compose themselves rather than running inside the Python image.
+    "webinstall",
+    "webcheck",
+    "webbuild",
+    "psql",
+    "shell",
+}
 
 
 def _run(*args: str) -> int:
@@ -118,6 +131,39 @@ def dev() -> int:
 def web() -> int:
     """Run the Next.js dev server in the foreground."""
     return _compose("up", "--build", "web")
+
+
+def _in_web(*command: str) -> int:
+    """Run something inside the web container. npm lives there and only there."""
+    return _compose(
+        "run",
+        "--rm",
+        "--entrypoint",
+        "sh",
+        "web",
+        "-c",
+        "cd /app/apps/web && " + " ".join(command),
+    )
+
+
+def webinstall() -> int:
+    """Install the web dependencies into the node_modules volume.
+
+    ``--legacy-peer-deps`` because Blade declares its React Native peers as
+    required rather than optional; without it npm installs react-native into a
+    web app.
+    """
+    return _in_web("npm install --legacy-peer-deps --no-audit --no-fund")
+
+
+def webcheck() -> int:
+    """tsc --noEmit and vitest. The web half of `check`."""
+    return _in_web("npx tsc --noEmit") or _in_web("npx vitest run")
+
+
+def webbuild() -> int:
+    """A production build of the web app, which is also the strictest typecheck."""
+    return _in_web("npx next build")
 
 
 def psql() -> int:
@@ -248,6 +294,9 @@ TARGETS: dict[str, Callable[[], int]] = {
     "down": down,
     "dev": dev,
     "web": web,
+    "webinstall": webinstall,
+    "webcheck": webcheck,
+    "webbuild": webbuild,
     "psql": psql,
     "shell": shell,
     "lint": lint,

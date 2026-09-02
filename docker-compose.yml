@@ -72,7 +72,9 @@ services:
       - webmodules:/app/apps/web/node_modules
     ports:
       - "3000:3000"
-    command: sh -c "npm install && npm run dev -- --hostname 0.0.0.0"
+    # --legacy-peer-deps because Blade declares its React Native peers as
+    # required; npm would otherwise install react-native into a web app.
+    command: sh -c "npm install --legacy-peer-deps --no-audit --no-fund && npm run dev -- --hostname 0.0.0.0"
     depends_on:
       - api
 

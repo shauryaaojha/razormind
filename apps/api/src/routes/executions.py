@@ -28,6 +28,7 @@ from pydantic import BaseModel
 
 from evidence.models import Evidence
 from evidence.repository import load_evidence
+from narrative.render import canonical
 from provenance.builder import (
     MAX_DEPTH,
     Operand,
@@ -113,6 +114,13 @@ class EvidenceLine(BaseModel):
     #: because JSON's only numeric type is a float and a scale-6 ratio would not
     #: survive the round trip (D-02).
     value: int | str
+    #: The value as it is written -- ``₹4,06,260.00``, ``95.8012%``, ``-1.34``.
+    #: Served rather than re-derived by the client, because ``narrative/render.py``
+    #: is the one place that decides how a number is spelled and grounding
+    #: byte-matches against it. A second implementation in TypeScript would be a
+    #: second answer to "what does this number look like", and the two would
+    #: disagree the first time one of them was edited (D-54).
+    display: str
     period_from: str
     period_to: str
     dimension_value: str | None
@@ -128,6 +136,7 @@ class ProvenanceOperand(BaseModel):
     name: str
     reference: str
     value: int | str
+    display: str
     node: "ProvenanceLevel | None"
 
 
@@ -138,6 +147,7 @@ class ProvenanceLevel(BaseModel):
     metric_id: str
     unit: str
     value: int | str
+    display: str
     period_from: str
     period_to: str
     dimension_value: str | None
@@ -156,6 +166,7 @@ class EvidenceDetail(BaseModel):
     metric_id: str
     unit: str
     value: int | str
+    display: str
     period_from: str
     period_to: str
     dimension_value: str | None
@@ -281,6 +292,7 @@ async def get_evidence(execution_id: UUID, evidence_id: str) -> EvidenceDetail:
         metric_id=row.metric_id,
         unit=row.unit,
         value=_scalar(row.value),
+        display=canonical(row.value, row.unit),
         period_from=row.period_from,
         period_to=row.period_to,
         dimension_value=row.dimension_value,
@@ -319,6 +331,7 @@ def _line(row: Evidence) -> EvidenceLine:
         metric_id=row.metric_id,
         unit=row.unit,
         value=_scalar(row.value),
+        display=canonical(row.value, row.unit),
         period_from=row.period_from,
         period_to=row.period_to,
         dimension_value=row.dimension_value,
@@ -334,6 +347,7 @@ def _level(node: ProvenanceNode) -> ProvenanceLevel:
         metric_id=node.metric_id,
         unit=node.unit,
         value=_scalar(node.value),
+        display=canonical(node.value, node.unit),
         period_from=node.period_from,
         period_to=node.period_to,
         dimension_value=node.dimension_value,
@@ -350,5 +364,13 @@ def _operand(operand: Operand) -> ProvenanceOperand:
         name=operand.name,
         reference=operand.reference,
         value=_scalar(operand.value),
+        # A literal operand has no row and therefore no unit of its own; it is
+        # the ``100`` in a percentage-point conversion, and it is written as it
+        # appears in the expression.
+        display=(
+            str(operand.value)
+            if operand.node is None
+            else canonical(operand.value, operand.node.unit)
+        ),
         node=None if operand.node is None else _level(operand.node),
     )

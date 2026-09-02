@@ -300,11 +300,37 @@ the caller header is genuine, which is the JWT
 - Provenance drawer — the generic recursive evidence renderer
 - Execution history, replaying `execution_events` through the same component as live
 
+The interface is [Blade](https://github.com/razorpay/blade), Razorpay's own design system. Nothing
+in `apps/web` defines a colour, a radius, a font size or a spacing value of its own — a finance
+console that invents its own visual language is one more thing a reader has to learn before they
+can trust what it says.
+
 **Exit criteria**
 - Chat shows stages ticking, not a spinner
 - Every number in the dashboard is clickable down to source records
 - History and live chat share one trace component (asserted by a test, not by inspection)
 - The exception explorer shows *why* `SETTLEMENT_91` was rejected
+
+All four hold, in `apps/web/tests` (20 tests) and against the running stack. Four notes:
+
+**The shared-component criterion is asserted by rendering, not by imports.** "Both pages import
+`ExecutionView`" is a weaker claim than it sounds — it survives a history-only prop, and the drift
+shows up weeks later as a run that looks different depending on when you open it. The test feeds
+one event list through the component the way each page does and compares the markup character for
+character.
+
+**Stages tick because they are events.** `lib/trace.ts` is pure — events in, stages out, no
+fetching and no clock — so a half-finished run has exactly one running stage, the ones before it
+done, and the ones after it pending. A run that stopped early marks the stage it stopped *at* and
+leaves the rest pending, because a rejected plan did not fail at verification; it never got there.
+
+**The dashboard reads evidence, not `reconciliation_runs`.** Both hold the same figures and only
+one carries an evidence id, so only one is clickable
+([D-56](decisions.md#d-56--the-dashboard-is-built-on-evidence-not-on-the-reconciliation-table)).
+
+**The web app formats no money at all.** Every figure arrives with the string
+`narrative/render.py` already wrote — the same spelling the grounding gate byte-matches against
+([D-54](decisions.md#d-54--the-api-serves-the-rendered-figure-the-web-app-formats-nothing)).
 
 ---
 

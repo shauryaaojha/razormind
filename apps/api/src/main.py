@@ -7,7 +7,9 @@ be discovered under load.
 """
 
 from fastapi import APIRouter, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+from config.settings import get_settings
 from routes import agent, executions, health, provenance, reconciliation
 
 __all__ = ["API_PREFIX", "app", "create_app"]
@@ -23,6 +25,18 @@ def create_app() -> FastAPI:
             "Agentic financial computation and reconciliation. "
             "The LLM decides what to compute; deterministic code decides what the number is."
         ),
+    )
+
+    # The web app is a separate origin in every environment, including local.
+    # `Last-Event-ID` has to be allowed explicitly or a dropped SSE stream
+    # cannot resume: the browser sends the header and the preflight refuses it.
+    settings = get_settings()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(settings.cors_origins),
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", "X-RazorMind-User", "Last-Event-ID", "Accept"],
     )
 
     # /health stays at the root as well as under the prefix: container health

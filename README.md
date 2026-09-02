@@ -53,7 +53,7 @@ before anything non-deterministic touches it.
  6  Agent runtime       intent, plan, validate, execute, state    [DONE]
  7  Explainer           grounding, template fallback              [DONE]
  8  API surface         SSE streaming, OpenAPI contract           [DONE]
- 9  Web application     chat, dashboard, exceptions, provenance
+ 9  Web application     chat, dashboard, exceptions, provenance   [DONE]
 10  Failure & recovery  fault injection, graceful degradation
 11  Evaluation          intent/tool/computation/grounding accuracy
 12  Deployment & demo
@@ -175,6 +175,9 @@ image, which is why "works on my machine" and "passes CI" are not separate claim
 | `task.py diagnose` | every v1 tool, plus the cross-tool equivalences |
 | `task.py verify` | the same, through the five verification layers, then the provenance walk |
 | `task.py ask "..."` | one question through the whole runtime; `--canned <intent>` needs no key |
+| `task.py up` | Postgres, the API and the web app at `localhost:3000` |
+| `task.py webcheck` | `tsc --noEmit` and the web tests, inside the node container |
+| `task.py openapi` | regenerate the OpenAPI document and the TypeScript types |
 | `task.py test` | pytest, 100% branch coverage required on `runtime/` |
 | `task.py dbtest` | row-level security, against a real Postgres |
 | `task.py dev` / `web` / `psql` | containers, foreground |
@@ -183,10 +186,10 @@ image, which is why "works on my machine" and "passes CI" are not separate claim
 
 ## Status
 
-**Phases 0 through 8 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
+**Phases 0 through 9 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
 contracts, the no-float guard, the OpenAPI contract diff, the ten fixture assertions, and 396
 tests with 100% branch coverage on `runtime/`. A further 121 integration tests run against a real
-Postgres.
+Postgres, and `webcheck` runs `tsc --noEmit` plus 20 web tests.
 
 The three boundary mechanisms exist before any domain logic does, which is the point of the phase:
 
@@ -663,7 +666,97 @@ What is missing is proof that the caller header is genuine — that is the JWT, 
 function ([D-52](docs/decisions.md#d-52--identity-is-a-header-until-the-jwt-lands-and-the-merchant-is-checked-either-way)).
 An unauthenticated endpoint that looks authenticated is worse than one that says it is not.
 
-**Next: Phase 9 — the web application**, built on Razorpay's own design system.
+Phase 9 is the interface, built on [Blade](https://github.com/razorpay/blade) — Razorpay's own
+design system. Nothing in `apps/web` defines a colour, a radius, a font size or a spacing value of
+its own. A finance console that invents its own visual language is one more thing a reader has to
+learn before they can trust what it says.
+
+### Four surfaces, one rule: a number you cannot open is a number you cannot check
+
+```text
+/                 ask a question, watch the stages tick, read a grounded answer
+/reconciliation   the scorecard — every tile is a verified metric, every tile opens
+/history          every run, newest first
+/history/{id}     the same trace, replayed
+```
+
+**Every figure on screen is clickable down to source records.** A claim in the answer, a tile on
+the dashboard, an operand three levels into the drawer — each opens the same recursive renderer and
+lands on real transaction ids:
+
+```text
+net_revenue_change_ratio  -17.5956%            775 source records
+  (current - prior) / prior
+  current = ₹3,90,122.95
+    net_revenue_paise  ₹3,90,122.95
+      gross       = ₹4,06,260.00
+      refunds     = ₹11,782.00
+      fees        = ₹2,608.05
+      chargebacks = ₹1,747.00
+  prior   = ₹4,73,424.82
+    ...
+```
+
+The drawer has no knowledge of revenue, refunds or reconciliation. Every level is an evidence node
+that either declares a formula — in which case its operands are more nodes — or declares a fold, in
+which case it cites records and the walk stops. A component per metric would have to be written
+again for every metric anyone adds, and the one nobody wrote would be the one that silently showed
+nothing.
+
+### The dashboard reads evidence, not the reconciliation table
+
+Both hold the same figures. Only one carries an evidence id, and a number without one cannot be
+clicked. A product where the chat answer is inspectable and the dashboard is inert has two
+standards of proof in one interface
+([D-56](docs/decisions.md#d-56--the-dashboard-is-built-on-evidence-not-on-the-reconciliation-table)).
+
+The exception explorer is the other way round, because an exception is not a metric. It is the
+strongest single thing this system shows:
+
+```text
+TXN_183   NO_COUNTERPART
+  candidate SETTLEMENT_91 · AMOUNT_DATE_CANDIDATE · confidence 0.72
+  rejected: confidence 0.72 is below the 0.85 auto-match threshold
+```
+
+"We found something close and deliberately did not match it, and here is why" is a far stronger
+signal than an empty result.
+
+### History and live chat are the same rendering, and a test says so
+
+`execution_events` is append-only and sequenced, so a run watched live and the same run read an
+hour later are the same list of rows. Both pages read the same endpoint with the same function and
+render through the same component.
+
+"Both pages import `ExecutionView`" would be the weak version of that claim — it survives a
+history-only tweak, and the drift surfaces weeks later as a run that looks different depending on
+when you open it. The test feeds one event list through the component the way each page does and
+compares the markup character for character.
+
+### The web app formats no money at all
+
+Every value arrives with the string `narrative/render.py` already wrote — the same spelling the
+grounding gate byte-matches against. A TypeScript copy would be a second answer to "what does this
+number look like", and it would not even fail on the obvious case: `Intl.NumberFormat("en-IN")`
+groups Indian digits correctly. It would fail on a scale-6 ratio, where the browser rounds to three
+fraction digits and prints `95.801%` for a figure the server refuses to let a model call `95.80%`
+([D-54](docs/decisions.md#d-54--the-api-serves-the-rendered-figure-the-web-app-formats-nothing)).
+
+### Running it
+
+```bash
+python scripts/task.py up          # Postgres, API, and the web app on :3000
+python scripts/task.py webcheck    # tsc --noEmit + 20 web tests
+```
+
+With no `ANTHROPIC_API_KEY` the chat page shows the run failing at `PROVIDER_UNAVAILABLE`, which is
+the honest outcome and appears as a named stage rather than a silent spinner. Set the key and
+`LLM_ENABLED=true` and the same page runs the whole pipeline. The dashboard, the drawer and the
+history replay need no model at all.
+
+**Next: Phase 10 — failure and recovery.** Fault injection for each of the seven degradation rows,
+`PARTIAL` rendering that shows unavailable metrics as unavailable rather than blank or zero, and
+the `BLOCKED` surface that carries no numbers.
 
 ---
 

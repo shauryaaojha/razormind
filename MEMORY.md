@@ -120,8 +120,9 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 | 6 — Agent runtime | **Done.** Intent parser + confidence gate, deterministic planner, eleven validation gates, concurrent DAG executor, nine-state machine, event log. 359 + 104 tests |
 | 7 — Explainer | **Done.** Five grounding checks, byte-match on value *and* prose, regenerate-once, deterministic template below the model boundary, answer persisted. 396 + 106 tests |
 | 8 — API surface | **Done.** `POST /agent/runs` (202 + idempotency), resumable SSE, history listing, generated OpenAPI + TypeScript contract diffed in CI. 396 + 121 tests |
-| 9 — Web application | next. Chat, dashboard, exceptions, provenance drawer |
-| 10–12 | not started |
+| 9 — Web application | **Done.** Blade throughout. Chat with a live SSE trace, evidence-backed reconciliation scorecard, exception explorer with rejected candidates, recursive provenance drawer, history replay through the same component. 20 web tests |
+| 10 — Failure & recovery | next. Fault injection, PARTIAL and BLOCKED surfaces |
+| 11–12 | not started |
 
 ### Notes from Phase 0 worth not rediscovering
 
@@ -391,3 +392,33 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 - **`task.py openapi` regenerates `openapi.json` AND `api.ts`;** `check` diffs both. The TS
   generator raises on an unknown schema shape rather than emitting `any`.
   → [D-53](docs/decisions.md#d-53--the-typescript-contract-is-generated-and-both-halves-are-diffed-in-ci)
+
+### Notes from Phase 9 worth not rediscovering
+
+- **Blade forces React 18.** `@razorpay/blade` needs `styled-components@^5`, which does not
+  support React 19, so the web app is Next 14.2 + React 18.3 and `next.config` is `.mjs`
+  (Next 14 does not load a `.ts` config).
+  → [D-55](docs/decisions.md#d-55--the-web-app-is-pinned-to-react-18-because-blade-is)
+- **Install web deps with `--legacy-peer-deps`.** Blade declares its React Native peers as
+  required rather than optional; without the flag npm installs react-native into a web app.
+  `task.py webinstall` does it.
+- **Blade components take `testID`, not `data-testid`.** Arbitrary `data-*` props are dropped
+  by `Box`. Status is asserted through visible text (the badge, the spinner accessibility
+  label), which is the better assertion anyway.
+- **Blade's `Box` will not render as a `button`.** `components/Clickable.tsx` is a real button
+  with its appearance stripped; everything inside it is still Blade.
+- **styled-components v5 needs `app/registry.tsx`** to get its stylesheet into the streamed
+  HTML, or the page flashes unstyled.
+- **httpx-style buffering has a browser twin:** the stream is read with `fetch` + a reader
+  rather than `EventSource`, because `EventSource` reconnects when the server closes a
+  finished stream (replaying forever) and cannot send the caller header.
+- **The API serves a `display` string for every metric value**, so the web app formats no
+  money. The drift this prevents is not the grouping -- `Intl` gets that right -- it is a
+  scale-6 ratio rounded to three fraction digits.
+  → [D-54](docs/decisions.md#d-54--the-api-serves-the-rendered-figure-the-web-app-formats-nothing)
+- **The dashboard reads evidence, not `reconciliation_runs`**, because only evidence rows
+  carry an id a tile can open.
+  → [D-56](docs/decisions.md#d-56--the-dashboard-is-built-on-evidence-not-on-the-reconciliation-table)
+- **CORS had to be added** for the browser to reach the API, with `Last-Event-ID` in the
+  allowed headers -- without it a dropped SSE stream cannot resume, because the preflight
+  refuses the header the browser sends itself.

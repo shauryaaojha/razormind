@@ -120,6 +120,10 @@
             ],
             "title": "Dimension Value"
           },
+          "display": {
+            "title": "Display",
+            "type": "string"
+          },
           "evidence_id": {
             "title": "Evidence Id",
             "type": "string"
@@ -200,6 +204,7 @@
           "metric_id",
           "unit",
           "value",
+          "display",
           "period_from",
           "period_to",
           "dimension_value",
@@ -246,6 +251,10 @@
               }
             ],
             "title": "Dimension Value"
+          },
+          "display": {
+            "title": "Display",
+            "type": "string"
           },
           "evidence_id": {
             "title": "Evidence Id",
@@ -302,6 +311,7 @@
           "metric_id",
           "unit",
           "value",
+          "display",
           "period_from",
           "period_to",
           "dimension_value",
@@ -795,6 +805,10 @@
             ],
             "title": "Dimension Value"
           },
+          "display": {
+            "title": "Display",
+            "type": "string"
+          },
           "evidence_id": {
             "title": "Evidence Id",
             "type": "string"
@@ -871,6 +885,7 @@
           "metric_id",
           "unit",
           "value",
+          "display",
           "period_from",
           "period_to",
           "dimension_value",
@@ -885,6 +900,10 @@
       },
       "ProvenanceOperand": {
         "properties": {
+          "display": {
+            "title": "Display",
+            "type": "string"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -919,6 +938,7 @@
           "name",
           "reference",
           "value",
+          "display",
           "node"
         ],
         "title": "ProvenanceOperand",
