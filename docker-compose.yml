@@ -74,6 +74,12 @@ services:
       - "3000:3000"
     # --legacy-peer-deps because Blade declares its React Native peers as
     # required; npm would otherwise install react-native into a web app.
+    #
+    # node_modules is the named volume, not the bind mount, so it survives a
+    # rebuild -- and a `docker compose run web npm install` while this service
+    # is already running is two installs racing on one directory. If the dev
+    # server starts 500ing on modules that are plainly installed, that is what
+    # happened: `docker compose rm -sf web && docker volume rm razormind_webmodules`.
     command: sh -c "npm install --legacy-peer-deps --no-audit --no-fund && npm run dev -- --hostname 0.0.0.0"
     depends_on:
       - api

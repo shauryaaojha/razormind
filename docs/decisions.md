@@ -1101,6 +1101,13 @@ unstyled, which on a page of financial figures reads as numbers that are still l
 **Trigger to revisit.** Blade moving to styled-components v6. The change is then a version bump and
 deleting the registry.
 
+**Update, Phase 9.1.** The framework half of this turned out not to be pinned after all. Next 16
+still declares `react: ^18.2.0 || ^19.0.0`, so the app runs Next 16 on React 18 and only *React*
+is held back by Blade. The upgrade to Next 16 + TypeScript 7 + framer-motion 13 needed no code
+change; `useParams()` in the replay route meant even the async-`params` migration did not apply.
+`react-hot-toast` stays at 2.4.1 because Blade pins that version exactly rather than a range,
+which is Blade saying it uses internals rather than an API.
+
 ---
 
 ### D-56 — The dashboard is built on evidence, not on the reconciliation table
