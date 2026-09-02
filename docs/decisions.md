@@ -1125,3 +1125,67 @@ can show, and it has no evidence id because it is not a number anybody computed.
 
 **Cost to reverse.** Low. The consequence to keep in mind is that the dashboard is empty until an
 investigation has run, which is correct — there is nothing verified to show before then.
+
+---
+
+### D-57 — A second provider, and why a weaker model is a quality question not a correctness one
+
+**Decision.** `llm/provider.py` gains a `GroqProvider`, spoken over `httpx` against Groq's
+OpenAI-compatible endpoint, defaulting to `llama-3.3-70b-versatile`. Which vendor is in use is a
+named setting — `LLM_PROVIDER=anthropic|groq` — not an inference from whichever API key happens to
+be present. `LLM_MODEL` becomes `ANTHROPIC_MODEL`, with `GROQ_MODEL` beside it.
+
+**Why a second provider at all.** The first one costs money, and the entire deterministic half of
+this system — reconciliation, the eleven gates, verification, evidence, provenance, the template
+renderer — needs no model. What needs one is the chat entry point, and a demo where the chat box
+returns `PROVIDER_UNAVAILABLE` is a demo of the wrong thing. Groq's free tier makes the model path
+runnable by anyone who clones this.
+
+**Why that is safe to do, and the whole point.** Swapping a frontier model for a 70B open-weight
+one changes how often an answer is *phrased* well. It changes nothing about whether a figure on
+screen is correct, because both places a model is consulted are guarded:
+
+- an intent below `intent_confidence_threshold` asks a clarifying question instead of assuming
+  ([05-agent-runtime.md](05-agent-runtime.md#intent));
+- an explanation whose prose does not byte-match the verified rows is discarded and the
+  deterministic template is rendered instead
+  ([D-50](#d-50--the-template-renderer-sits-below-the-model-boundary-not-beside-it)).
+
+A weaker model trips those gates more often. It cannot get past them. If this were not true, the
+right response to "use a cheaper model" would be no; the fact that it is merely a quality trade is
+the architecture paying out.
+
+The concrete failure to expect is specific enough to name: an 8B model writes a claim whose
+structured `value` field is exactly right and whose prose rounds it — `₹4,06,260.00` declared,
+"about ₹4.06 lakh" written. Check 3 catches that, because it tokenises the claim's own span rather
+than trusting the declared field
+([06-trust-layer.md](06-trust-layer.md#grounding), and
+[D-48](#d-48--grounding-checks-magnitude-and-unit-the-direction-word-goes-unchecked) on where that
+check stops). The user sees the template.
+Nobody sees a rounded figure presented as verified.
+
+**Why `httpx` rather than the `groq` SDK.** The whole surface used here is one POST, and `httpx` is
+already a dependency — so this costs no image rebuild. That is the small reason. The real one is
+contract 3 in `.importlinter`, which forbids the agent plane from importing `anthropic` directly.
+That contract is meaningful while there is one vendor SDK in the tree and one module allowed to
+touch it. A second SDK means a second name to enumerate, and an enumeration is a thing someone
+forgets to extend.
+
+**Why the provider is named rather than sniffed.** Picking whichever key is present reads as
+convenience until an environment has both, at which point the model that answered a month-end
+question was chosen by import order. `response_source` already records which provider ran; the
+setting makes the choice deliberate on the way in as well as legible on the way out.
+
+**Costs.**
+
+- Groq returns tool-call arguments as a JSON *string*, where Anthropic returns an object. Parsed
+  and re-dumped inside the provider so that "the model did not emit JSON" arrives as a
+  `PROVIDER_UNAVAILABLE` rather than as a confusing schema mismatch downstream.
+- Groq rewrites `temperature: 0` to `1e-8`. Reproducibility was never load-bearing — the API offers
+  no seed either way — but it is worth knowing the request is not sent as written.
+- The free tier rate-limits, and a 4xx body from a model host can echo the request back. The error
+  message is truncated to 200 characters, because the request contains the merchant's figures.
+- `LLM_MODEL` → `ANTHROPIC_MODEL` is a breaking rename for anyone who set it. With two vendors,
+  a single `LLM_MODEL` is a setting whose meaning depends on another setting.
+
+**Cost to reverse.** Low. Delete the class and the two settings; `get_provider` loses a branch.

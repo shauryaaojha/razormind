@@ -342,6 +342,13 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 - **`get_provider()` returning a refusing provider is a supported state.** No key means
   `PROVIDER_UNAVAILABLE`, never a canned intent -- an invented intent answers a question nobody
   asked, verified and cited.
+- **There are two providers: `anthropic` and `groq`.** `LLM_PROVIDER` names one; it is never
+  inferred from whichever key is present, because two keys in one environment would pick a model
+  by accident. `GroqProvider` is `httpx` against the OpenAI-compatible endpoint, not the `groq`
+  SDK -- one vendor SDK in the tree is what makes contract 3 enforceable. Groq returns tool
+  arguments as a JSON *string* and rewrites `temperature: 0` to `1e-8`. Settings are
+  `ANTHROPIC_MODEL` and `GROQ_MODEL`; the old `LLM_MODEL` is gone.
+  → [D-57](docs/decisions.md#d-57--a-second-provider-and-why-a-weaker-model-is-a-quality-question-not-a-correctness-one)
 - **`task.py` grew argument pass-through** for `ask`, checked before the unknown-target scan so
   a question is not read as a list of targets.
 

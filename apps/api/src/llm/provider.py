@@ -1,7 +1,7 @@
 """The model boundary. One interface, and everything above it is replaceable.
 
-This is the only module in the project that imports a vendor SDK, and it is the
-only one allowed to (contract 1 in ``.importlinter``: ``tools``,
+This is the only module in the project that talks to a model vendor, and it is
+the only one allowed to (contract 1 in ``.importlinter``: ``tools``,
 ``reconciliation``, ``runtime``, ``verification``, ``evidence`` and
 ``provenance`` cannot reach ``llm`` at all, and the build fails if one tries).
 
@@ -21,20 +21,29 @@ Structured output is a **forced tool call**, not a "please reply in JSON"
 instruction. The schema goes to the provider as the tool's input schema, so the
 model's output is constrained rather than requested, and a parse failure is a
 real failure rather than a prose apology that happens to contain braces.
+
+Two vendors implement that: Anthropic, and Groq's open-weight models on a free
+tier. They are interchangeable *because* nothing above this module trusts a
+model with a number -- swapping a frontier model for an 70B open-weight one
+changes how often an answer is phrased well, and changes nothing about whether
+a figure on screen is correct (D-57).
 """
 
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, assert_never
 
+import httpx
 from pydantic import BaseModel
 
 from config.settings import Settings, get_settings
 
 __all__ = [
+    "AnthropicProvider",
     "Completion",
     "DisabledProvider",
+    "GroqProvider",
     "LLMProvider",
     "ProviderError",
     "ProviderTimeoutError",
@@ -227,6 +236,134 @@ class AnthropicProvider:
         )
 
 
+class GroqProvider:
+    """Groq's OpenAI-compatible endpoint, spoken over ``httpx``.
+
+    Deliberately not the ``groq`` SDK. The whole surface used here is one POST,
+    and ``httpx`` is already a dependency -- so this costs no image rebuild, and
+    more importantly it keeps the count of vendor SDKs in the tree at one, which
+    is the number contract 3 in ``.importlinter`` can meaningfully police.
+
+    The open-weight models behind this are materially weaker than the frontier
+    one, and the system is built so that this is a quality question rather than
+    a correctness one. Both places a model is consulted are guarded: an intent
+    below ``intent_confidence_threshold`` asks instead of assuming, and an
+    explanation that does not byte-match the verified rows is discarded for the
+    deterministic template. A weaker model trips those gates more often. It
+    cannot get past them.
+    """
+
+    name = "groq"
+
+    #: Groq's OpenAI-compatible base. The path is fixed here rather than
+    #: configurable: a settable model endpoint is a settable exfiltration
+    #: target, and the prompts carry a merchant's figures.
+    ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._api_key = api_key
+        self._model = model
+        self._transport = transport
+
+    async def structured(
+        self,
+        *,
+        system: str,
+        prompt: str,
+        schema: Mapping[str, Any],
+        max_tokens: int,
+        timeout_seconds: int,
+    ) -> Completion:
+        body: dict[str, Any] = {
+            "model": self._model,
+            "max_completion_tokens": max_tokens,
+            # Groq rewrites a temperature of 0 to 1e-8 rather than rejecting it,
+            # so this is as close to reproducible as the endpoint offers. As
+            # with Anthropic, nothing downstream depends on that being true.
+            "temperature": 0,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": STRUCTURED_TOOL,
+                        "description": "Return the structured result.",
+                        "parameters": dict(schema),
+                    },
+                }
+            ],
+            "tool_choice": {"type": "function", "function": {"name": STRUCTURED_TOOL}},
+        }
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=float(timeout_seconds),
+                transport=self._transport,
+            ) as client:
+                response = await client.post(
+                    self.ENDPOINT,
+                    json=body,
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                )
+        except httpx.TimeoutException as error:
+            raise ProviderTimeoutError(f"no response in {timeout_seconds}s") from error
+        except httpx.HTTPError as error:
+            raise ProviderUnavailableError(str(error)) from error
+
+        if response.status_code != httpx.codes.OK:
+            # Truncated: the body of a 4xx from a model host has been known to
+            # echo the request, and the request contains the merchant's figures.
+            raise ProviderUnavailableError(
+                f"groq returned {response.status_code}: {response.text[:200]}"
+            )
+
+        return self._completion(response.json())
+
+    def _completion(self, payload: Mapping[str, Any]) -> Completion:
+        """Pull the forced call's arguments out of an OpenAI-shaped response."""
+        usage: Mapping[str, Any] = payload.get("usage") or {}
+        for choice in payload.get("choices") or []:
+            message: Mapping[str, Any] = choice.get("message") or {}
+            for call in message.get("tool_calls") or []:
+                function: Mapping[str, Any] = call.get("function") or {}
+                if function.get("name") != STRUCTURED_TOOL:
+                    continue
+                return Completion(
+                    # Unlike Anthropic, Groq returns the arguments as a JSON
+                    # *string*. It is parsed and re-dumped rather than passed
+                    # through, so that "the model did not emit JSON" surfaces
+                    # here, as a provider failure, instead of downstream as a
+                    # confusing schema mismatch.
+                    text=json.dumps(_parsed(function.get("arguments"))),
+                    model=str(payload.get("model") or self._model),
+                    input_tokens=int(usage.get("prompt_tokens") or 0),
+                    output_tokens=int(usage.get("completion_tokens") or 0),
+                )
+        raise ProviderUnavailableError(
+            "the model returned no structured block despite a forced tool call"
+        )
+
+
+def _parsed(arguments: Any) -> Any:
+    if not isinstance(arguments, str):
+        raise ProviderUnavailableError(
+            f"the tool call carried {type(arguments).__name__}, not JSON"
+        )
+    try:
+        return json.loads(arguments)
+    except json.JSONDecodeError as error:
+        raise ProviderUnavailableError(f"the tool call arguments are not JSON: {error}") from error
+
+
 def get_provider(settings: Settings | None = None) -> LLMProvider:
     """The configured provider, or one that refuses.
 
@@ -238,6 +375,14 @@ def get_provider(settings: Settings | None = None) -> LLMProvider:
     resolved = settings or get_settings()
     if not resolved.llm_enabled:
         return DisabledProvider("llm_enabled is false")
-    if not resolved.anthropic_api_key:
-        return DisabledProvider("no ANTHROPIC_API_KEY is configured")
-    return AnthropicProvider(resolved.anthropic_api_key, resolved.llm_model)
+    match resolved.llm_provider:
+        case "anthropic":
+            if not resolved.anthropic_api_key:
+                return DisabledProvider("no ANTHROPIC_API_KEY is configured")
+            return AnthropicProvider(resolved.anthropic_api_key, resolved.anthropic_model)
+        case "groq":
+            if not resolved.groq_api_key:
+                return DisabledProvider("no GROQ_API_KEY is configured")
+            return GroqProvider(resolved.groq_api_key, resolved.groq_model)
+        case _:
+            assert_never(resolved.llm_provider)

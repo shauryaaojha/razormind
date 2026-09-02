@@ -499,7 +499,7 @@ execution starts, not surfaced as a tool error deep in a running DAG
 
 ### No model is a supported state, not an outage
 
-With no `ANTHROPIC_API_KEY`, `get_provider()` returns a provider that refuses every call, and a run
+With no API key, `get_provider()` returns a provider that refuses every call, and a run
 fails with `PROVIDER_UNAVAILABLE` rather than inventing an intent. That is the correct outcome and
 worth seeing once: a canned intent would answer a question nobody asked, verified and cited, with
 nothing anywhere indicating that no model was consulted.
@@ -749,10 +749,30 @@ python scripts/task.py up          # Postgres, API, and the web app on :3000
 python scripts/task.py webcheck    # tsc --noEmit + 20 web tests
 ```
 
-With no `ANTHROPIC_API_KEY` the chat page shows the run failing at `PROVIDER_UNAVAILABLE`, which is
-the honest outcome and appears as a named stage rather than a silent spinner. Set the key and
-`LLM_ENABLED=true` and the same page runs the whole pipeline. The dashboard, the drawer and the
-history replay need no model at all.
+With no API key the chat page shows the run failing at `PROVIDER_UNAVAILABLE`, which is the honest
+outcome and appears as a named stage rather than a silent spinner. Set a key and `LLM_ENABLED=true`
+and the same page runs the whole pipeline. The dashboard, the drawer and the history replay need no
+model at all.
+
+There are two ways to get that key, and the free one is the point:
+
+```bash
+# .env — the free path. A key comes from https://console.groq.com/keys
+LLM_ENABLED=true
+LLM_PROVIDER=groq
+GROQ_API_KEY=gsk_...
+# GROQ_MODEL=llama-3.3-70b-versatile   (the default)
+```
+
+An open-weight 70B model in place of a frontier one changes how often an answer is *phrased* well.
+It changes nothing about whether a figure on screen is correct, and that is the architecture paying
+out rather than a claim about the model. Both places a model is consulted are guarded: a
+low-confidence intent asks instead of assuming, and an explanation whose prose does not byte-match
+the verified rows is thrown away for the template. The specific thing a smaller model does — declare
+`₹4,06,260.00` in the structured field and write "about ₹4.06 lakh" in the sentence — is caught,
+because check 3 tokenises the prose rather than trusting the declared value. You get the template.
+You never get a rounded figure presented as verified
+([D-57](docs/decisions.md#d-57--a-second-provider-and-why-a-weaker-model-is-a-quality-question-not-a-correctness-one)).
 
 **Next: Phase 10 — failure and recovery.** Fault injection for each of the seven degradation rows,
 `PARTIAL` rendering that shows unavailable metrics as unavailable rather than blank or zero, and

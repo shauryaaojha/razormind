@@ -31,9 +31,25 @@ class Settings(BaseSettings):
 
     # Phase 6 onward. Absent means the provider is disabled, which is a
     # supported mode, not a failure: docs/12-tech-stack.md#failure-is-a-first-class-path.
-    anthropic_api_key: str | None = None
     llm_enabled: bool = False
-    llm_model: str = "claude-sonnet-5"
+
+    #: Which vendor sits behind ``llm/provider.py``. Named explicitly rather
+    #: than inferred from whichever key happens to be present: two keys in one
+    #: environment would otherwise pick a model by accident, and "which model
+    #: answered" is a question a finance audit is entitled to a firm answer to
+    #: (D-57).
+    llm_provider: Literal["anthropic", "groq"] = "anthropic"
+
+    anthropic_api_key: str | None = None
+    anthropic_model: str = "claude-sonnet-5"
+
+    #: Groq serves open-weight models on a free tier. 70B rather than 8B
+    #: because the smaller model degrades on the explainer, and the way it
+    #: degrades is a claim whose prose rounds a figure its own structured field
+    #: got right -- which the grounding gate catches, but only by discarding the
+    #: answer (D-57).
+    groq_api_key: str | None = None
+    groq_model: str = "llama-3.3-70b-versatile"
 
     #: Below this, the intent parser asks rather than assumes
     #: (docs/05-agent-runtime.md#intent). Guessing a comparison period is the

@@ -5,10 +5,10 @@ python scripts/task.py ask "Why did net revenue fall in August?"
 python scripts/task.py ask --canned revenue_diagnosis "why did revenue fall?"
 ```
 
-Without `--canned` this calls the configured model. With no `ANTHROPIC_API_KEY`
-or `LLM_ENABLED=false` that is a `PROVIDER_UNAVAILABLE` failure, which is the
-honest outcome and worth seeing once: the system refuses rather than inventing
-an intent.
+Without `--canned` this calls the configured model -- Anthropic or Groq,
+whichever `LLM_PROVIDER` names. With no key, or `LLM_ENABLED=false`, that is a
+`PROVIDER_UNAVAILABLE` failure, which is the honest outcome and worth seeing
+once: the system refuses rather than inventing an intent.
 
 `--canned` substitutes a scripted response for the model's, so the deterministic
 half -- plan, eleven gates, concurrent DAG, five verification layers, evidence,

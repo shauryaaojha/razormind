@@ -16,7 +16,7 @@ this document fixes the *choices*, and `pyproject.toml` / `package.json` fix the
 | API | Python 3.13 · FastAPI · Pydantic v2 · asyncio | Railway or Render |
 | Database | PostgreSQL 16 via Supabase, with row-level security | Supabase |
 | Auth | Supabase Auth (JWT) | Supabase |
-| LLM | Provider abstraction; Claude (`claude-opus-5`) as the default implementation | Anthropic API |
+| LLM | Provider abstraction. Two implementations: Claude, and open-weight Llama on Groq | Anthropic API · Groq |
 | Contract | OpenAPI generated from FastAPI → typed TS client | CI |
 | CI | GitHub Actions, running the same container image as local | — |
 | Toolchain | Docker Compose. Nothing is installed on the host | — |
@@ -78,7 +78,7 @@ fan-out and nothing else.
 | `alembic` | Migrations | Standard with SQLAlchemy |
 | `asyncpg` | Postgres driver | Async, and passes the caller's JWT for RLS |
 | `anthropic` | LLM provider (default impl) | Official SDK; see below |
-| `httpx` | HTTP client | Async, used by the SDK |
+| `httpx` | HTTP client | Async. Also *is* the Groq provider — see below |
 | `uvicorn` | ASGI server | Single worker, see above |
 
 ### Tooling
@@ -158,26 +158,32 @@ deliberately narrow — two methods, because that is all the platform needs:
 
 ```python
 class LLMProvider(Protocol):
-    async def structured_output(
-        self, *, schema: type[BaseModel], system: str, user: str
-    ) -> BaseModel: ...
+    name: str
 
-    async def explain(
-        self, *, system: str, context: ExplainContext
-    ) -> str: ...
+    async def structured(
+        self, *, system: str, prompt: str, schema: Mapping[str, Any],
+        max_tokens: int, timeout_seconds: int,
+    ) -> Completion: ...
 ```
 
-A narrow interface is the point. A provider-agnostic wrapper that exposes every vendor feature
-ends up leaking the vendor anyway; two methods can be implemented faithfully against any of them.
+Phase 6 narrowed this from the two methods planned here to **one**. The second method was
+`explain`, returning prose — and prose is exactly the shape the trust layer cannot check. The
+explainer asks for the same schema-constrained structured call as the intent parser and gets back
+claims it can byte-match against verified rows
+([06-trust-layer.md](06-trust-layer.md#grounding)). One method also means a new provider is one
+method to implement and one place to get wrong.
 
-`llm/` is the only package permitted to import a vendor SDK, enforced by `import-linter`.
+A narrow interface is the point. A provider-agnostic wrapper that exposes every vendor feature
+ends up leaking the vendor anyway.
+
+`llm/` is the only package permitted to reach a model vendor, enforced by `import-linter`.
 
 ### Default implementation: Claude
 
 | Setting | Value | Reason |
 | --- | --- | --- |
 | Model | `claude-opus-5` | Default for both calls. 1M context, $5/$25 per MTok |
-| SDK | `anthropic` (official Python) | Never an OpenAI-compatible shim |
+| SDK | `anthropic` (official Python) | The vendor's own client, not a compatibility shim |
 | Structured output | `output_config={"format": {...}}`, or `client.messages.parse()` | Schema-constrained intent extraction. Not prompt-and-hope JSON parsing |
 | Thinking | `thinking={"type": "adaptive"}` | Current API. `budget_tokens` is removed on this model and returns 400 |
 | Effort | `output_config={"effort": "low"}` for intent, `"medium"` for explanation | Both tasks are small and well-specified; neither needs deep reasoning |
@@ -193,16 +199,34 @@ Two notes for whoever implements Phase 6:
 - **Parse tool/structured inputs with `json.loads`**, never string matching — JSON string
   escaping varies between models.
 
+### Second implementation: Groq
+
+`LLM_PROVIDER=groq` runs the same two calls against open-weight models on Groq's free tier.
+
+| Setting | Value | Reason |
+| --- | --- | --- |
+| Model | `llama-3.3-70b-versatile` | Free tier, and reliable enough at a forced tool call. `llama-3.1-8b-instant` is also free and phrases the explanation badly often enough to be a worse demo |
+| Client | `httpx` against `https://api.groq.com/openai/v1` | Already a dependency. Adding the `groq` SDK for one POST would put a second vendor SDK in a tree whose boundary contract polices exactly that |
+| Structured output | `tools` + `tool_choice: {"type": "function", "function": {"name": "emit"}}` | The same forced tool call, in OpenAI's spelling |
+| Arguments | A JSON **string**, unlike Anthropic's object | Parsed inside the provider, so "the model did not emit JSON" is a `PROVIDER_UNAVAILABLE`, not a schema mismatch three frames later |
+| Temperature | `0` | Groq rewrites it to `1e-8` rather than rejecting it. As with Anthropic, nothing downstream depends on the run being reproducible |
+
+The provider is **named**, never inferred from whichever key happens to be set. Two keys in one
+environment would otherwise pick a model by accident, and "which model answered this" is a
+question a finance audit is entitled to a firm answer to
+([D-57](decisions.md#d-57--a-second-provider-and-why-a-weaker-model-is-a-quality-question-not-a-correctness-one)).
+
 ### Cost
 
 Both calls are small: intent parsing is a few hundred tokens in and under a hundred out; the
 explainer receives verified metrics and evidence, not raw records. At Opus 5 rates a full agent
-run is fractions of a cent, so there is no reason to reach for a cheaper model and trade
-intent accuracy — which is a scored evaluation dimension
-([09-testing-and-eval.md](09-testing-and-eval.md#evaluation)).
+run is fractions of a cent. On Groq's free tier it is nothing, and the trade is quality rather
+than correctness: a weaker model produces a low-confidence intent (which asks instead of assuming)
+or an ungrounded explanation (which is discarded for the template) more often. It cannot produce a
+wrong number, because it is never asked for one.
 
-Swapping the model is a config change, not a code change. That is the abstraction earning its
-keep.
+Swapping the model *or the vendor* is a config change, not a code change. That is the abstraction
+earning its keep.
 
 ### Failure is a first-class path
 
