@@ -254,6 +254,22 @@ def test_the_brief_hands_the_model_the_exact_string_to_copy(published: EvidenceS
         assert canonical(row.value, row.unit) in text
 
 
+def test_the_brief_carries_the_raw_value_a_claim_has_to_declare(
+    published: EvidenceSet,
+) -> None:
+    """Grounding checks two spellings, so the brief has to hand over two.
+
+    Without the raw column a model can only reach the claim's value by stripping
+    the rupee sign and the grouping back off the rendering -- the conversion the
+    first rule forbids -- so the instruction contradicted itself and the claim
+    was wrong whichever rule the model followed.
+    """
+    text = brief(published)
+    for row in published:
+        assert str(row.value) in text
+    assert "| value | value as written |" in text
+
+
 def test_the_brief_never_leaks_a_source_record(published: EvidenceSet) -> None:
     """The model gets metrics and evidence ids. It has no business with rows."""
     assert "TXN_1" not in brief(published)

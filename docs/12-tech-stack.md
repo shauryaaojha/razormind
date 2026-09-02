@@ -16,7 +16,7 @@ this document fixes the *choices*, and `pyproject.toml` / `package.json` fix the
 | API | Python 3.13 · FastAPI · Pydantic v2 · asyncio | Railway or Render |
 | Database | PostgreSQL 16 via Supabase, with row-level security | Supabase |
 | Auth | Supabase Auth (JWT) | Supabase |
-| LLM | Provider abstraction. Two implementations: Claude, and open-weight Llama on Groq | Anthropic API · Groq |
+| LLM | Provider abstraction. Three implementations: Claude, open-weight models on Groq, Gemini | Anthropic · Groq · Google AI Studio |
 | Contract | OpenAPI generated from FastAPI → typed TS client | CI |
 | CI | GitHub Actions, running the same container image as local | — |
 | Toolchain | Docker Compose. Nothing is installed on the host | — |
@@ -226,6 +226,34 @@ environment would otherwise pick a model by accident, and "which model answered 
 question a finance audit is entitled to a firm answer to
 ([D-57](decisions.md#d-57--a-second-provider-and-why-a-weaker-model-is-a-quality-question-not-a-correctness-one)).
 
+### Third implementation: Gemini
+
+`LLM_PROVIDER=gemini` runs both calls against Google AI Studio's free tier. This is the free path
+that reaches `response_source = LLM` rather than the template.
+
+| Setting | Value | Reason |
+| --- | --- | --- |
+| Model | `gemini-flash-lite-latest` | `gemini-flash-latest` writes better and, on the free tier, answers 503 roughly three times in four and spends its thinking budget before emitting the forced call. A model that returns an answer beats a better model that returns a capacity error |
+| Client | `httpx` against `generativelanguage.googleapis.com/v1beta` | Same reason as Groq: one POST, no second vendor SDK |
+| Structured output | `functionDeclarations` + `toolConfig.functionCallingConfig.mode = ANY` with one allowed name | Gemini's spelling of a forced call |
+| Schema | Translated — see below | Gemini takes OpenAPI 3.0's Schema object, **not** JSON Schema |
+| Context | ~1M tokens | The 8,700-token evidence brief is not a consideration here, which is the whole reason this provider exists |
+| Transient errors | One retry on 429/503, 1.5s apart | 503 under load clears; a missing key does not |
+
+**The schema has to be translated.** Gemini rejects the request outright on any keyword outside
+OpenAPI 3.0's Schema object — and `additionalProperties`, which pydantic emits for every
+`extra="forbid"` model, is a 400. `openapi_subset()` collapses `anyOf: [X, null]` to `X` with
+`nullable: true`, and drops everything outside an allowlist. Allowlist rather than denylist,
+because an unrecognised keyword passed through is a 400 that only appears in production, and the
+set of keywords pydantic emits grows whenever somebody adds a field. Dropping a constraint is safe
+in the direction that matters: the schema *guides* generation, the pydantic model *validates* the
+result.
+
+**The retry lives in the provider, not the explainer.** The explainer skips its own retry on a
+provider failure because "a missing model does not become present on a second call" — true of a
+missing key, false of a 503 under load. Only the layer that can see the status code can tell them
+apart.
+
 ### Cost
 
 Both calls are small: intent parsing is a few hundred tokens in and under a hundred out; the
@@ -234,6 +262,9 @@ run is fractions of a cent. On Groq's free tier it is nothing, and the trade is 
 than correctness: a weaker model produces a low-confidence intent (which asks instead of assuming)
 or an ungrounded explanation (which is discarded for the template) more often. It cannot produce a
 wrong number, because it is never asked for one.
+
+On Gemini's free tier both calls run and the answer is written by the model, grounded, at
+`response_source = LLM`.
 
 Swapping the model *or the vendor* is a config change, not a code change. That is the abstraction
 earning its keep.

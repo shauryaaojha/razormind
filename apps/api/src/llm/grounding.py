@@ -66,13 +66,26 @@ _TOKEN = re.compile(r"-?₹?-?\d[\d,]*(?:\.\d+)?%?")
 def literals_for(published: EvidenceSet, *extra: str) -> frozenset[str]:
     """Digit-bearing strings the prose may contain without claiming them.
 
-    Every window any row was published for, plus whatever the caller adds -- in
-    practice the merchant id, which the model is told to echo. Derived from the
-    evidence rather than passed in wholesale, so the exemption cannot be widened
-    from outside to whatever the last failing answer happened to contain.
+    Every window any row was published for **and the year of each**, plus
+    whatever the caller adds -- in practice the merchant id, which the model is
+    told to echo. Derived from the evidence rather than passed in wholesale, so
+    the exemption cannot be widened from outside to whatever the last failing
+    answer happened to contain.
+
+    The year is here because the ISO form on its own is not how anyone writes a
+    period in a sentence. "Net revenue fell in July 2026" is the ordinary way to
+    open this answer, and with only ``2026-07-01`` exempt the ``2026`` is an
+    unclaimed number and a correct answer goes to the template. Exempting it is
+    within the boundary D-48 draws -- grounding checks the figures, not the
+    sentence -- because a year is the window this execution already ran on, not
+    a quantity anybody computed (D-58).
+
+    Masking is digit-bounded (see :func:`_masked`), so exempting ``2026`` cannot
+    reach inside ``20261`` and turn a wrong count into an unremarkable ``1``.
     """
     windows = {row.period_from for row in published} | {row.period_to for row in published}
-    return frozenset(windows | {value for value in extra if value})
+    years = {window.split("-")[0] for window in windows}
+    return frozenset(windows | years | {value for value in extra if value})
 
 
 def check_grounding(
@@ -142,10 +155,22 @@ def _spans(narrative: str, claims: Sequence[Claim]) -> tuple[tuple[int, int], ..
 
 
 def _masked(narrative: str, literals: frozenset[str]) -> str:
-    """Blank out the permitted literals, preserving every index."""
+    """Blank out the permitted literals, preserving every index.
+
+    Longest first, so ``2026-07-01`` is gone before ``2026`` is looked for, and
+    only where no digit touches either end. A plain substring replace would let
+    the exempt year eat four digits out of the middle of a figure and leave a
+    remainder that grounds as something else entirely -- ``20261`` becoming
+    ``1`` is a wrong count passing as a right one, which is the one direction
+    this gate is not allowed to fail in.
+    """
     masked = narrative
     for literal in sorted(literals, key=len, reverse=True):
-        masked = masked.replace(literal, " " * len(literal))
+        masked = re.sub(
+            rf"(?<!\d){re.escape(literal)}(?!\d)",
+            " " * len(literal),
+            masked,
+        )
     return masked
 
 

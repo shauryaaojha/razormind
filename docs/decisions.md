@@ -1214,3 +1214,79 @@ is not a candidate at any size: it rejects tool calling, and this provider has n
 to fall back to.
 
 **Cost to reverse.** Low. Delete the class and the two settings; `get_provider` loses a branch.
+
+---
+
+### D-58 — A third provider, and the two defects a real model found
+
+**Decision.** `GeminiProvider`, over `httpx` against Google AI Studio, defaulting to
+`gemini-flash-lite-latest`. It is the free path that reaches `response_source = LLM`. Adding it
+required fixing two things that were wrong before it existed, and those are the interesting half of
+this entry.
+
+**Why a third one.** Groq's free tier caps every model at 8,000 tokens a minute
+([D-57](#d-57--a-second-provider-and-why-a-weaker-model-is-a-quality-question-not-a-correctness-one)),
+and the explainer's evidence brief is ~8,700. So on Groq the explanation *always* fell back. Gemini
+gives a million-token context on the free tier, so the brief is not a consideration at all.
+
+**Defect one: the brief never carried the value a claim has to declare.** The system prompt said
+"claims[].value must be exactly the value column of the brief: an integer for paise and count
+metrics" — and the brief's value column held `₹6,38,151.00`, which is not an integer. The raw
+`63815100` appeared nowhere. So the rule contradicted itself, and the only way to satisfy it was to
+strip the rupee sign and the digit grouping back off, which the *first* rule forbids as a
+conversion. Every real model failed, and it failed as `MALFORMED_EXPLANATION` — a validation error
+on `int | Decimal` — which reads like the model being stupid rather than the prompt being
+impossible.
+
+The fix is that the brief carries both, because grounding checks both: `value` is what the claim
+declares and is byte-matched against the stored row, `value as written` is what the prose writes and
+is matched against `renderings()`. Two checks, two columns, and the instruction now maps onto them
+one to one. This was invisible for two phases because the scripted providers in the tests were
+written with the correct raw values already in hand — the fixture answered a question the prompt
+never asked.
+
+**Defect two: the window exemption did not survive being written in English.** `literals_for`
+exempted the ISO windows, so `2026-07-01` could appear unclaimed. A model opens this answer with
+"Net revenue fell in July 2026" — and `2026` was then an unclaimed number, failing check 1 on an
+answer that was otherwise perfect. `_value_and_unit` already carried a comment anticipating exactly
+this ("a sentence that names the window it covers would otherwise be asked to render 2026 as a
+paise amount"); the literals set simply did not contain the form a sentence uses.
+
+The year is now exempt too. That stays inside the boundary D-48 draws — grounding checks the
+figures, not the sentence — because a year is the window this execution already ran on, not a
+quantity anybody computed.
+
+**And masking became digit-bounded, which is the part that matters.** `_masked` was a plain
+substring replace. Exempting `2026` would then have blanked four digits out of the *middle* of
+`20261` and left `1` — a wrong count grounding as an unremarkable one. That is the single direction
+this gate may never fail in, so masking now requires that no digit touches either end of the
+literal. Longest-first ordering already meant `2026-07-01` is consumed before `2026` is looked for.
+
+**The schema had to be translated.** Gemini's `FunctionDeclaration.parameters` is OpenAPI 3.0's
+Schema object, not JSON Schema, and it rejects the whole request on an unknown keyword —
+`additionalProperties`, which pydantic emits for every `extra="forbid"` model, is a 400.
+`openapi_subset()` collapses `anyOf: [X, {"type": "null"}]` to `X` with `nullable: true` and drops
+everything outside an allowlist.
+
+Allowlist, not denylist. A denylist passes an unrecognised keyword straight through to a 400 that
+only shows up in production, and the set of keywords pydantic emits grows whenever somebody adds a
+field. Dropping a constraint is safe in the direction that matters here: the schema *guides*
+generation, the pydantic model *validates* the result, so a field the declaration failed to forbid
+is a validation error and a correction, never a value anyone believes.
+
+**The retry sits in the provider, not the explainer.** The explainer skips its retry on a provider
+failure, because "a missing model does not become present on a second call". That is true of a
+missing key and false of a 503 under load, which Google's free tier returns often. Only the layer
+that can see the status code can tell those apart, so `GeminiProvider` retries 429 and 503 once,
+1.5 seconds later, and everything that reaches the explainer really is not going to fix itself.
+
+**On the model.** `gemini-flash-latest` is the better writer. On the free tier it answered 503 on
+three of four calls, and on the fourth it spent its thinking budget before emitting the forced call
+and finished `MAX_TOKENS` with no call at all. `-lite` has no thinking to spend and answered four
+times out of four. A model that returns an answer beats a better model that returns a capacity
+error. Relatedly, the "no structured block" error now carries `finishReason`: `MAX_TOKENS` and a
+refusal are different problems with different fixes, and the code alone cannot tell them apart.
+
+**Cost to reverse.** The provider, low — delete the class and two settings. The two grounding fixes
+are not reversible and should not be: they were defects, and the only reason they survived to Phase
+9 is that no real model had ever been asked to satisfy them.

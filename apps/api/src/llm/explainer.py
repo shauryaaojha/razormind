@@ -215,13 +215,16 @@ def system_prompt() -> str:
             "Rules, each of which is mechanically checked before your answer is shown:",
             "  - Use only the figures in the evidence brief. Never compute, convert, "
             "round, restate at a different precision, or infer a number.",
-            "  - Write each figure exactly as the brief writes it, character for character.",
+            "  - Each row of the brief gives the same figure twice. Your narrative writes the "
+            "'value as written' column, character for character. Your claim declares the "
+            "'value' column. Never swap them and never convert between them.",
             "  - Every number in your narrative needs a claim naming the metric, the value, "
             "the unit and the evidence id it came from.",
             "  - claims[].text must be an exact substring of your narrative, long enough to "
             "contain the figure it is about and nothing else numeric.",
-            "  - claims[].value must be exactly the value column of the brief: an integer for "
-            "paise and count metrics, a quoted string for ratio and pp metrics.",
+            "  - claims[].value is the 'value' column verbatim: an integer for paise and count "
+            "metrics, a quoted string for ratio and pp metrics. No rupee sign, no grouping "
+            "commas, no percent sign -- those belong only in the narrative.",
             "  - The analysis dates and the merchant id may appear without a claim. No other "
             "digit may.",
             "",
@@ -234,16 +237,25 @@ def system_prompt() -> str:
 
 
 def brief(published: EvidenceSet) -> str:
-    """The evidence, as the model sees it: id, metric, value, and what made it.
+    """The evidence, as the model sees it: id, metric, both values, and support.
 
     The rendered string is in the brief rather than left to the model to
     format, which is what turns "write the number exactly" from a hope into an
     instruction that can be followed. A model asked to render 40626000 paise
     itself would have to choose a grouping convention, and the byte-match would
     then be a test of that choice.
+
+    **Both forms are here, and they have to be**, because grounding checks two
+    different things against two different spellings of the same figure: the
+    claim's declared ``value`` must byte-match the stored one, and the prose
+    must write the rendered one. A brief carrying only the rendering asks the
+    model to strip a rupee sign and the digit grouping back off to fill in the
+    claim -- which is the arithmetic the first rule in the system prompt
+    forbids, so the instruction contradicted itself and the claim was wrong
+    whichever rule the model followed (D-58).
     """
     lines = [
-        "evidence_id | metric | unit | value as written | window | support",
+        "evidence_id | metric | unit | value | value as written | window | support",
     ]
     lines.extend(_row(row) for row in sorted(published, key=lambda row: row.id))
     return "\n".join(lines)
@@ -265,6 +277,10 @@ def _row(row: Evidence) -> str:
             row.id,
             metric_id,
             row.unit,
+            # `str`, and the same `str` grounding compares against. Anything
+            # prettier here is a second rendering convention, and the whole
+            # point of the column is that there is exactly one.
+            str(row.value),
             canonical(row.value, row.unit),
             f"[{row.period_from}, {row.period_to})",
             support,

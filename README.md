@@ -754,15 +754,20 @@ outcome and appears as a named stage rather than a silent spinner. Set a key and
 and the same page runs the whole pipeline. The dashboard, the drawer and the history replay need no
 model at all.
 
-There are two ways to get that key, and the free one is the point:
+There are three providers, and the free one is the point:
 
 ```bash
-# .env — the free path. A key comes from https://console.groq.com/keys
+# .env — the free path. A key comes from https://aistudio.google.com/apikey
 LLM_ENABLED=true
-LLM_PROVIDER=groq
-GROQ_API_KEY=gsk_...
-# GROQ_MODEL=openai/gpt-oss-120b   (the default)
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=...
+# GEMINI_MODEL=gemini-flash-lite-latest   (the default)
 ```
+
+`LLM_PROVIDER=anthropic` and `LLM_PROVIDER=groq` are the other two. It is a named setting rather
+than an inference from whichever key is present: two keys in one environment would otherwise pick a
+model by accident, and "which model answered this" is a question a finance audit is entitled to a
+firm answer to.
 
 An open-weight model in place of a frontier one changes how often an answer is *phrased* well.
 It changes nothing about whether a figure on screen is correct, and that is the architecture paying
@@ -774,13 +779,36 @@ because check 3 tokenises the prose rather than trusting the declared value. You
 You never get a rounded figure presented as verified
 ([D-57](docs/decisions.md#d-57--a-second-provider-and-why-a-weaker-model-is-a-quality-question-not-a-correctness-one)).
 
-One honest caveat about the free tier specifically. Groq caps free models at **8,000 tokens per
-minute**. Intent parsing is ~1,000 tokens and fits; the explainer carries the whole evidence brief,
-~8,700 tokens for a five-tool diagnosis, and does not. So on a free key the model parses your
-question — windows, comparison period, confidence — and the answer is rendered from the
-deterministic template. That is not a broken setup, it is the Phase 7 degradation reached by a
-boring route, and the run still completes with every figure verified and clickable. Groq's dev tier
-or an Anthropic key runs both halves.
+One caveat, on Groq specifically. Groq caps free models at **8,000 tokens per minute**, and the
+explainer's evidence brief is ~8,700 — so on a free Groq key the model parses the question and the
+template renders the answer. That is not a broken setup, it is the Phase 7 degradation reached by a
+boring route, and the run still completes with every figure verified and clickable. Gemini's free
+tier has a million-token context and runs both halves; this is what a real answer looks like, and
+every figure in it byte-matches a verified row:
+
+```text
+ANSWER
+  source      LLM
+  attempts    1
+  grounding   63 checks
+
+  Net revenue fell in July 2026 compared with June 2026 by -₹44,823.93, representing
+  a change of -6.7046%.
+
+  The drop was driven by lower attempt volume, which contributed -₹16,249.11, and a
+  declining success rate contributing -₹18,247.89. Additional negative pressure came
+  from refunds contributing -₹9,446.00 and chargebacks contributing -₹1,023.00. These
+  were slightly offset by fees, which contributed ₹142.07.
+```
+
+Getting there found two defects that had survived since Phase 7, both of which only a real model
+could surface. The evidence brief never carried the raw value a claim has to declare — only the
+rendered one — so the prompt asked for a figure it had not supplied and forbade the conversion that
+would have produced it. And the window exemption covered `2026-07-01` but not `2026`, so "fell in
+July 2026" failed check 1 on an otherwise perfect answer. Fixing the second meant making the
+literal masking digit-bounded, because blanking `2026` inside `20261` leaves `1` — a wrong count
+grounding as a right one, which is the one direction this gate may never fail in
+([D-58](docs/decisions.md#d-58--a-third-provider-and-the-two-defects-a-real-model-found)).
 
 **Next: Phase 10 — failure and recovery.** Fault injection for each of the seven degradation rows,
 `PARTIAL` rendering that shows unavailable metrics as unavailable rather than blank or zero, and

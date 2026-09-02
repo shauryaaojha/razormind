@@ -19,11 +19,13 @@ from llm.provider import (
     AnthropicProvider,
     Completion,
     DisabledProvider,
+    GeminiProvider,
     GroqProvider,
     LLMProvider,
     ProviderTimeoutError,
     ProviderUnavailableError,
     get_provider,
+    openapi_subset,
 )
 
 Handler = Any
@@ -256,3 +258,208 @@ async def test_a_missing_key_names_the_key_it_wanted() -> None:
 def test_the_switch_beats_a_configured_key() -> None:
     settings = _settings(llm_enabled=False, llm_provider="groq", groq_api_key="gsk_test")
     assert isinstance(get_provider(settings), DisabledProvider)
+
+
+def test_all_three_vendors_are_reachable_by_name() -> None:
+    keys = {
+        "anthropic": ("anthropic_api_key", AnthropicProvider),
+        "groq": ("groq_api_key", GroqProvider),
+        "gemini": ("gemini_api_key", GeminiProvider),
+    }
+    for vendor, (field, expected) in keys.items():
+        settings = _settings(llm_enabled=True, llm_provider=vendor, **{field: "test-key"})
+        assert isinstance(get_provider(settings), expected), vendor
+
+
+async def test_a_missing_gemini_key_names_the_key_it_wanted() -> None:
+    provider = get_provider(_settings(llm_enabled=True, llm_provider="gemini"))
+    assert isinstance(provider, DisabledProvider)
+    assert "GEMINI_API_KEY" in await _refusal(provider)
+
+
+# -------------------------------------------------------------------- gemini
+
+
+def _gemini_payload(args: dict[str, Any], *, name: str = "emit") -> dict[str, Any]:
+    return {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"functionCall": {"name": name, "args": args}}],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 11207, "candidatesTokenCount": 1117},
+    }
+
+
+def _gemini(handler: Handler, *, model: str = "gemini-flash-lite-latest") -> GeminiProvider:
+    return GeminiProvider("test-key", model, transport=httpx.MockTransport(handler))
+
+
+async def _gemini_call(provider: GeminiProvider) -> Completion:
+    return await provider.structured(
+        system="you are a parser",
+        prompt="how did revenue move in July",
+        schema=SCHEMA,
+        max_tokens=1024,
+        timeout_seconds=30,
+    )
+
+
+async def test_gemini_round_trips_a_forced_call() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_gemini_payload({"window": "2026-07"}))
+
+    completion = await _gemini_call(_gemini(handler))
+
+    assert json.loads(completion.text) == {"window": "2026-07"}
+    assert completion.input_tokens == 11207
+    assert completion.output_tokens == 1117
+    # Gemini does not echo the model, so this is the one that was asked for.
+    assert completion.model == "gemini-flash-lite-latest"
+
+
+async def test_gemini_forces_the_call_in_its_own_spelling() -> None:
+    """`ANY` plus exactly one allowed name is how Gemini forces a named tool."""
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        seen["key"] = request.headers["x-goog-api-key"]
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json=_gemini_payload({"window": "2026-07"}))
+
+    await _gemini_call(_gemini(handler))
+
+    assert seen["key"] == "test-key"
+    assert seen["url"].endswith("/models/gemini-flash-lite-latest:generateContent")
+    assert seen["toolConfig"]["functionCallingConfig"] == {
+        "mode": "ANY",
+        "allowedFunctionNames": ["emit"],
+    }
+    assert seen["tools"][0]["functionDeclarations"][0]["name"] == "emit"
+    # The system prompt is its own field here, not a first message.
+    assert seen["systemInstruction"]["parts"][0]["text"] == "you are a parser"
+    assert seen["contents"][0]["parts"][0]["text"] == "how did revenue move in July"
+
+
+async def test_gemini_retries_a_capacity_error_once() -> None:
+    """503 means "ask again", and the free tier says it often."""
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(503, json={"error": {"message": "high demand"}})
+        return httpx.Response(200, json=_gemini_payload({"window": "2026-07"}))
+
+    completion = await _gemini_call(_gemini(handler))
+
+    assert len(calls) == 2
+    assert json.loads(completion.text) == {"window": "2026-07"}
+
+
+async def test_gemini_gives_up_after_one_retry() -> None:
+    """The retry is for a blip. A provider that is down stays down."""
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(503, json={"error": {"message": "high demand"}})
+
+    with pytest.raises(ProviderUnavailableError) as raised:
+        await _gemini_call(_gemini(handler))
+    assert len(calls) == 2
+    assert "503" in str(raised.value)
+
+
+async def test_a_thinking_model_that_never_emitted_the_call_says_so() -> None:
+    """`MAX_TOKENS` and a refusal are different problems with different fixes."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"role": "model"}, "finishReason": "MAX_TOKENS"}],
+                "usageMetadata": {"promptTokenCount": 11207, "thoughtsTokenCount": 4096},
+            },
+        )
+
+    with pytest.raises(ProviderUnavailableError) as raised:
+        await _gemini_call(_gemini(handler))
+    assert "MAX_TOKENS" in str(raised.value)
+
+
+async def test_gemini_times_out_as_a_timeout() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("too slow", request=request)
+
+    with pytest.raises(ProviderTimeoutError):
+        await _gemini_call(_gemini(handler))
+
+
+# ------------------------------------------------------ the schema dialect
+
+
+def test_the_declaration_drops_what_gemini_rejects() -> None:
+    """`additionalProperties` is a 400, and pydantic emits it for every model."""
+    translated = openapi_subset(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"window": {"type": "string", "additionalProperties": False}},
+            "required": ["window"],
+        }
+    )
+    assert "additionalProperties" not in translated
+    assert "additionalProperties" not in translated["properties"]["window"]
+    assert translated["required"] == ["window"]
+
+
+def test_an_optional_field_becomes_nullable() -> None:
+    """`X | None` is `anyOf: [X, null]` in pydantic and `nullable` in OpenAPI."""
+    translated = openapi_subset(
+        {
+            "type": "object",
+            "properties": {
+                "period": {
+                    "anyOf": [{"type": "string", "format": "date"}, {"type": "null"}],
+                    "default": None,
+                }
+            },
+        }
+    )
+    period = translated["properties"]["period"]
+    assert period["type"] == "string"
+    assert period["nullable"] is True
+    assert "anyOf" not in period
+
+
+def test_a_real_union_keeps_its_anyof() -> None:
+    """Only the null arm collapses. `int | Decimal` is a choice the model makes."""
+    translated = openapi_subset(
+        {"anyOf": [{"type": "integer"}, {"type": "string", "pattern": "^-?[0-9.]+$"}]}
+    )
+    assert [option["type"] for option in translated["anyOf"]] == ["integer", "string"]
+
+
+def test_the_allowlist_survives_a_keyword_nobody_has_seen_yet() -> None:
+    """A denylist would pass an unknown keyword through to a 400 in production."""
+    translated = openapi_subset({"type": "string", "$comment": "x", "unevaluatedItems": True})
+    assert translated == {"type": "string"}
+
+
+def test_the_real_schemas_translate_to_something_gemini_accepts() -> None:
+    """The two schemas that actually go over the wire, checked as a whole."""
+    from intent.models import Intent
+    from llm.explainer import Draft
+    from llm.provider import json_schema_for
+
+    for model in (Draft, Intent):
+        translated = openapi_subset(json_schema_for(model))
+        assert "additionalProperties" not in json.dumps(translated)
+        assert '"type": "null"' not in json.dumps(translated)
+        assert translated["properties"]

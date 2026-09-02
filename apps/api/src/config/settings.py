@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     #: environment would otherwise pick a model by accident, and "which model
     #: answered" is a question a finance audit is entitled to a firm answer to
     #: (D-57).
-    llm_provider: Literal["anthropic", "groq"] = "anthropic"
+    llm_provider: Literal["anthropic", "groq", "gemini"] = "anthropic"
 
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-sonnet-5"
@@ -54,6 +54,17 @@ class Settings(BaseSettings):
     #: request time, not a startup failure.
     groq_api_key: str | None = None
     groq_model: str = "openai/gpt-oss-120b"
+
+    #: Gemini is the free tier that actually fits: a million-token context
+    #: rather than Groq's eight thousand tokens a minute, which is what decides
+    #: whether the explainer's evidence brief can be sent at all (D-58).
+    #:
+    #: `-lite` rather than `gemini-flash-latest` because on the free tier the
+    #: larger model answers 503 far more often than it answers, and its thinking
+    #: budget is spent before the forced call is emitted. A model that returns
+    #: an answer beats a better model that returns a capacity error.
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-flash-lite-latest"
 
     #: Below this, the intent parser asks rather than assumes
     #: (docs/05-agent-runtime.md#intent). Guessing a comparison period is the

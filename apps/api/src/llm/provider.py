@@ -22,17 +22,23 @@ instruction. The schema goes to the provider as the tool's input schema, so the
 model's output is constrained rather than requested, and a parse failure is a
 real failure rather than a prose apology that happens to contain braces.
 
-Two vendors implement that: Anthropic, and Groq's open-weight models on a free
-tier. They are interchangeable *because* nothing above this module trusts a
-model with a number -- swapping a frontier model for an 70B open-weight one
+Three vendors implement that: Anthropic, Groq's open-weight models, and
+Google's Gemini. They are interchangeable *because* nothing above this module
+trusts a model with a number -- swapping a frontier model for a small free one
 changes how often an answer is phrased well, and changes nothing about whether
 a figure on screen is correct (D-57).
+
+Each speaks the forced call in its own dialect, and the differences live here
+rather than leaking upward: Anthropic returns the arguments as an object, Groq
+as a JSON string, and Gemini will not accept a JSON Schema at all -- only the
+OpenAPI subset its function declarations are defined in (D-58).
 """
 
+import asyncio
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol, assert_never
+from typing import Any, Final, Protocol, assert_never
 
 import httpx
 from pydantic import BaseModel
@@ -43,6 +49,7 @@ __all__ = [
     "AnthropicProvider",
     "Completion",
     "DisabledProvider",
+    "GeminiProvider",
     "GroqProvider",
     "LLMProvider",
     "ProviderError",
@@ -364,6 +371,208 @@ def _parsed(arguments: Any) -> Any:
         raise ProviderUnavailableError(f"the tool call arguments are not JSON: {error}") from error
 
 
+#: Status codes that mean "ask again", as opposed to "this will not work".
+#: Google's free tier answers 503 under load often enough that treating it as a
+#: dead provider would send most runs to the template for a reason that clears
+#: in a second.
+_TRANSIENT: Final = frozenset({429, 503})
+
+#: One retry, and a pause long enough for a capacity blip to clear. Longer would
+#: be spending the caller's timeout budget on hope.
+_RETRY_SECONDS: Final = 1.5
+
+#: The keywords Gemini's ``FunctionDeclaration.parameters`` understands. It is
+#: OpenAPI 3.0's Schema object, not JSON Schema, and the request is rejected
+#: outright on anything else -- ``additionalProperties``, which pydantic emits
+#: for every ``extra="forbid"`` model, is a 400.
+_OPENAPI_KEYWORDS: Final = frozenset(
+    {
+        "anyOf",
+        "default",
+        "description",
+        "enum",
+        "format",
+        "items",
+        "maxItems",
+        "maxLength",
+        "maximum",
+        "minItems",
+        "minLength",
+        "minimum",
+        "nullable",
+        "pattern",
+        "properties",
+        "propertyOrdering",
+        "required",
+        "title",
+        "type",
+    }
+)
+
+
+def openapi_subset(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Translate a JSON Schema into the dialect Gemini's function calls accept.
+
+    Two transformations, and an allowlist.
+
+    ``anyOf: [X, {"type": "null"}]`` -- which is how pydantic writes ``X |
+    None`` -- becomes ``X`` with ``nullable: true``. Gemini has no null type,
+    and left alone the whole declaration is rejected.
+
+    Everything outside :data:`_OPENAPI_KEYWORDS` is dropped, by allowlist rather
+    than by naming the offenders. A denylist would pass an unrecognised keyword
+    straight through to a 400 that only shows up in production, and the set of
+    keywords pydantic emits grows whenever somebody adds a field.
+
+    Dropping a constraint is safe in the direction that matters: the schema
+    *guides* generation, it does not verify the result. Every response is still
+    validated against the pydantic model that produced the schema, so a field
+    the declaration failed to forbid is a validation error and a correction,
+    never a value anyone believes.
+    """
+    translated: dict[str, Any] = _translated(schema)
+    return translated
+
+
+def _translated(node: Any) -> Any:
+    if isinstance(node, list):
+        return [_translated(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+
+    options = node.get("anyOf")
+    if isinstance(options, list):
+        concrete = [option for option in options if option.get("type") != "null"]
+        if len(concrete) == 1 and len(concrete) < len(options):
+            rest = {key: value for key, value in node.items() if key != "anyOf"}
+            return _translated({**rest, **concrete[0], "nullable": True})
+
+    translated: dict[str, Any] = {}
+    for key, value in node.items():
+        if key not in _OPENAPI_KEYWORDS:
+            continue
+        if key == "properties":
+            translated[key] = {name: _translated(child) for name, child in value.items()}
+        else:
+            translated[key] = _translated(value)
+    return translated
+
+
+class GeminiProvider:
+    """Google's Gemini, over ``httpx``, for the same reasons as Groq.
+
+    The free tier here is the one that fits this system: a million-token context
+    against Groq's eight thousand tokens a minute, which is the difference
+    between the explainer running and the explainer always falling back (D-58).
+
+    What it costs is a schema translation -- see :func:`openapi_subset` -- and a
+    retry. The retry lives here rather than in the explainer on purpose. The
+    explainer skips its own retry on a provider failure because "a missing model
+    does not become present on a second call", which is true of a missing key
+    and false of a 503 under load. Only the layer that can see the status code
+    can tell those apart.
+    """
+
+    name = "gemini"
+
+    ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._api_key = api_key
+        self._model = model
+        self._transport = transport
+
+    async def structured(
+        self,
+        *,
+        system: str,
+        prompt: str,
+        schema: Mapping[str, Any],
+        max_tokens: int,
+        timeout_seconds: int,
+    ) -> Completion:
+        body: dict[str, Any] = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "systemInstruction": {"parts": [{"text": system}]},
+            "tools": [
+                {
+                    "functionDeclarations": [
+                        {
+                            "name": STRUCTURED_TOOL,
+                            "description": "Return the structured result.",
+                            "parameters": openapi_subset(schema),
+                        }
+                    ]
+                }
+            ],
+            # `ANY` plus exactly one allowed name is Gemini's spelling of a
+            # forced call.
+            "toolConfig": {
+                "functionCallingConfig": {
+                    "mode": "ANY",
+                    "allowedFunctionNames": [STRUCTURED_TOOL],
+                }
+            },
+            "generationConfig": {"temperature": 0, "maxOutputTokens": max_tokens},
+        }
+
+        url = self.ENDPOINT.format(model=self._model)
+        headers = {"X-goog-api-key": self._api_key}
+        try:
+            async with httpx.AsyncClient(
+                timeout=float(timeout_seconds),
+                transport=self._transport,
+            ) as client:
+                response = await client.post(url, json=body, headers=headers)
+                if response.status_code in _TRANSIENT:
+                    await asyncio.sleep(_RETRY_SECONDS)
+                    response = await client.post(url, json=body, headers=headers)
+        except httpx.TimeoutException as error:
+            raise ProviderTimeoutError(f"no response in {timeout_seconds}s") from error
+        except httpx.HTTPError as error:
+            raise ProviderUnavailableError(str(error)) from error
+
+        if response.status_code != httpx.codes.OK:
+            raise ProviderUnavailableError(
+                f"gemini returned {response.status_code}: {response.text[:200]}"
+            )
+
+        return self._completion(response.json())
+
+    def _completion(self, payload: Mapping[str, Any]) -> Completion:
+        usage: Mapping[str, Any] = payload.get("usageMetadata") or {}
+        for candidate in payload.get("candidates") or []:
+            content: Mapping[str, Any] = candidate.get("content") or {}
+            for part in content.get("parts") or []:
+                call: Mapping[str, Any] = part.get("functionCall") or {}
+                if call.get("name") != STRUCTURED_TOOL:
+                    continue
+                return Completion(
+                    text=json.dumps(call.get("args")),
+                    # Gemini does not echo the model, so this is the one that
+                    # was asked for rather than the one that answered. The two
+                    # differ whenever the name is an alias like
+                    # `gemini-flash-latest`.
+                    model=self._model,
+                    input_tokens=int(usage.get("promptTokenCount") or 0),
+                    output_tokens=int(usage.get("candidatesTokenCount") or 0),
+                )
+        # A thinking model can spend its whole output budget on thoughts and
+        # finish with `MALFORMED_FUNCTION_CALL` and no call at all, so the
+        # finish reason is carried: it is the difference between "the model
+        # refused" and "the budget was too small".
+        reasons = [candidate.get("finishReason") for candidate in payload.get("candidates") or []]
+        raise ProviderUnavailableError(
+            f"no structured block despite a forced tool call (finish: {reasons})"
+        )
+
+
 def get_provider(settings: Settings | None = None) -> LLMProvider:
     """The configured provider, or one that refuses.
 
@@ -384,5 +593,9 @@ def get_provider(settings: Settings | None = None) -> LLMProvider:
             if not resolved.groq_api_key:
                 return DisabledProvider("no GROQ_API_KEY is configured")
             return GroqProvider(resolved.groq_api_key, resolved.groq_model)
+        case "gemini":
+            if not resolved.gemini_api_key:
+                return DisabledProvider("no GEMINI_API_KEY is configured")
+            return GeminiProvider(resolved.gemini_api_key, resolved.gemini_model)
         case _:
             assert_never(resolved.llm_provider)

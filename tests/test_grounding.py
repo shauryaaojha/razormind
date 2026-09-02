@@ -18,7 +18,7 @@ import pytest
 from evidence.builder import EvidenceSet
 from evidence.models import Aggregation, Evidence
 from evidence.vocabulary import METRICS
-from evidence_fixtures import MERCHANT, PRIOR, WINDOW, bridge
+from evidence_fixtures import MERCHANT, PRIOR, WINDOW, bridge, leaf
 from llm.grounding import CHECKS, check_grounding, literals_for
 from narrative.models import Claim, Explanation
 from narrative.render import canonical, renderings
@@ -369,4 +369,66 @@ def test_literals_are_taken_from_the_evidence_not_from_the_answer(
     published: EvidenceSet,
 ) -> None:
     allowed = literals_for(published)
-    assert allowed == {WINDOW[0], WINDOW[1], PRIOR[0], PRIOR[1]}
+    years = {window.split("-")[0] for window in (*WINDOW, *PRIOR)}
+    assert allowed == {WINDOW[0], WINDOW[1], PRIOR[0], PRIOR[1]} | years
+
+
+def test_a_sentence_may_name_its_own_period_in_english(published: EvidenceSet) -> None:
+    """ "Net revenue fell in July 2026" is the ordinary way to open this answer.
+
+    With only the ISO window exempt, the year is an unclaimed number and a
+    correct answer goes to the template.
+    """
+    row = next(row for row in published if row.unit == "paise")
+    year = row.period_from.split("-")[0]
+    narrative = (
+        f"Net revenue in {_month(row.period_from)} {year} was {canonical(row.value, row.unit)}."
+    )
+    explanation = Explanation(
+        narrative=narrative,
+        claims=[
+            Claim(
+                text=narrative,
+                metric_id=row.metric_id,
+                value=row.value,
+                unit=row.unit,
+                evidence_id=row.id,
+            )
+        ],
+    )
+    report = check_grounding(explanation, published, literals=literals_for(published))
+    assert report.passed, report.failures
+
+
+def test_the_exempt_year_cannot_reach_inside_a_figure(published: EvidenceSet) -> None:
+    """Masking is digit-bounded, or an exempt year eats digits out of a count.
+
+    Blanking `2026` inside `20261` would leave `1`, and a wrong count would
+    ground as an unremarkable one. That is the single direction this gate is
+    not allowed to fail in.
+    """
+    year = WINDOW[0].split("-")[0]
+    row = leaf("succeeded_count", int(f"{year}1"), ["TXN_1"])
+    published = EvidenceSet([*published, row])
+    narrative = f"There were {year}2 successful payments."
+    explanation = Explanation(
+        narrative=narrative,
+        claims=[
+            Claim(
+                text=narrative,
+                metric_id=row.metric_id,
+                value=row.value,
+                unit=row.unit,
+                evidence_id=row.id,
+            )
+        ],
+    )
+    report = check_grounding(explanation, published, literals=literals_for(published))
+    assert not report.passed
+    assert any(f"the answer writes '{year}2'" in failure for failure in report.failures)
+
+
+def _month(iso: str) -> str:
+    from datetime import date
+
+    return date.fromisoformat(iso).strftime("%B")
