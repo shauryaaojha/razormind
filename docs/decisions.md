@@ -1131,7 +1131,7 @@ investigation has run, which is correct — there is nothing verified to show be
 ### D-57 — A second provider, and why a weaker model is a quality question not a correctness one
 
 **Decision.** `llm/provider.py` gains a `GroqProvider`, spoken over `httpx` against Groq's
-OpenAI-compatible endpoint, defaulting to `llama-3.3-70b-versatile`. Which vendor is in use is a
+OpenAI-compatible endpoint, defaulting to `openai/gpt-oss-120b`. Which vendor is in use is a
 named setting — `LLM_PROVIDER=anthropic|groq` — not an inference from whichever API key happens to
 be present. `LLM_MODEL` becomes `ANTHROPIC_MODEL`, with `GROQ_MODEL` beside it.
 
@@ -1187,5 +1187,30 @@ setting makes the choice deliberate on the way in as well as legible on the way 
   message is truncated to 200 characters, because the request contains the merchant's figures.
 - `LLM_MODEL` → `ANTHROPIC_MODEL` is a breaking rename for anyone who set it. With two vendors,
   a single `LLM_MODEL` is a setting whose meaning depends on another setting.
+
+**What the free tier actually buys.** Half the model path, and the honest half. Groq caps every
+free model at 8,000 tokens per minute; the intent call is ~1,000 tokens and the explainer's
+evidence brief is ~8,700, so the question is parsed by a model and the answer is rendered from the
+template. Two things are worth saying about that rather than engineering around it.
+
+It is the degradation this system already has, reached by an ordinary route. Nobody had to build a
+rate-limit path — `PROVIDER_UNAVAILABLE` at explanation time was already specified to skip the
+retry and render the template, because a missing model does not become present on a second call.
+
+And the brief is large for a reason that should not be traded away cheaply. It is ~100 rows of
+`evidence_id | metric | unit | value as written | window | support`, and the id is the biggest
+column. The model cites that id, and grounding resolves it — shortening it to a handle would put an
+indirection between what the model wrote and what the gate checks, which is the one place in this
+system where indirection is not free. Fitting a vendor's free tier is not a good enough reason to
+introduce it.
+
+**On the model name.** It is a setting, and it has to be, because Groq's catalogue moves under
+it: this was written against `llama-3.3-70b-versatile` and that model was gone from the account by
+the time the key was live. A retired model surfaces as a 404 at request time — a
+`PROVIDER_UNAVAILABLE` like any other, which the run already degrades through — rather than as a
+startup failure, which is the right trade for a vendor whose inventory is not ours to pin.
+`GET /openai/v1/models` on your own key is the only authority on what it holds. `groq/compound*`
+is not a candidate at any size: it rejects tool calling, and this provider has no unstructured mode
+to fall back to.
 
 **Cost to reverse.** Low. Delete the class and the two settings; `get_provider` loses a branch.

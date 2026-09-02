@@ -205,11 +205,21 @@ Two notes for whoever implements Phase 6:
 
 | Setting | Value | Reason |
 | --- | --- | --- |
-| Model | `llama-3.3-70b-versatile` | Free tier, and reliable enough at a forced tool call. `llama-3.1-8b-instant` is also free and phrases the explanation badly often enough to be a worse demo |
+| Model | `openai/gpt-oss-120b` | The largest free model that accepts a forced tool call. Groq's catalogue moves — the Llama models were on it and are not any more — so `GET /openai/v1/models` on your own key is the authority, not this table. `groq/compound*` rejects tool calling outright |
 | Client | `httpx` against `https://api.groq.com/openai/v1` | Already a dependency. Adding the `groq` SDK for one POST would put a second vendor SDK in a tree whose boundary contract polices exactly that |
 | Structured output | `tools` + `tool_choice: {"type": "function", "function": {"name": "emit"}}` | The same forced tool call, in OpenAI's spelling |
 | Arguments | A JSON **string**, unlike Anthropic's object | Parsed inside the provider, so "the model did not emit JSON" is a `PROVIDER_UNAVAILABLE`, not a schema mismatch three frames later |
 | Temperature | `0` | Groq rewrites it to `1e-8` rather than rejecting it. As with Anthropic, nothing downstream depends on the run being reproducible |
+
+**The free tier does not fit the explanation call.** Every free model on Groq is capped at 8,000
+tokens per minute. Intent parsing is about 1,000 tokens and fits comfortably; the explainer carries
+the whole evidence brief, which for a five-tool revenue diagnosis is ~8,700 tokens — evidence ids
+and rendered rupee figures tokenise at roughly 2.5 characters per token, so the brief is denser
+than its character count suggests. It does not fit at any output budget, because the cap is on
+input. The result is that on the free tier **the model parses the question and the template renders
+the answer**: exactly the degradation Phase 7 was built for, reached for a boring reason. The
+fallback reason in `execution_events` carries the provider's message, so a rate limit is
+distinguishable from a missing key.
 
 The provider is **named**, never inferred from whichever key happens to be set. Two keys in one
 environment would otherwise pick a model by accident, and "which model answered this" is a

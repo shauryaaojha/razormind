@@ -196,8 +196,12 @@ async def test_no_model_at_all_still_answers_with_every_verified_figure(
         merchant_id=MERCHANT,
     )
     assert result.source == "TEMPLATE_FALLBACK"
-    assert result.reason == "PROVIDER_UNAVAILABLE"
     assert result.grounding_attempts == 0
+    # The code, and then why -- a reader of the event log has to be able to
+    # tell a missing key from a rate limit.
+    assert result.reason is not None
+    assert result.reason.startswith("PROVIDER_UNAVAILABLE: ")
+    assert "ANTHROPIC_API_KEY" in result.reason
     for row in published:
         assert canonical(row.value, row.unit) in result.explanation.narrative
 
@@ -207,7 +211,8 @@ async def test_a_provider_timeout_is_not_retried(published: EvidenceSet) -> None
         published, provider=BrokenProvider(), question=QUESTION, merchant_id=MERCHANT
     )
     assert result.source == "TEMPLATE_FALLBACK"
-    assert result.reason == "PROVIDER_TIMEOUT"
+    assert result.reason is not None
+    assert result.reason.startswith("PROVIDER_TIMEOUT: ")
 
 
 async def test_the_fallback_is_held_to_the_same_gate(published: EvidenceSet) -> None:

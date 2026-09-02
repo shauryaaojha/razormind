@@ -761,10 +761,10 @@ There are two ways to get that key, and the free one is the point:
 LLM_ENABLED=true
 LLM_PROVIDER=groq
 GROQ_API_KEY=gsk_...
-# GROQ_MODEL=llama-3.3-70b-versatile   (the default)
+# GROQ_MODEL=openai/gpt-oss-120b   (the default)
 ```
 
-An open-weight 70B model in place of a frontier one changes how often an answer is *phrased* well.
+An open-weight model in place of a frontier one changes how often an answer is *phrased* well.
 It changes nothing about whether a figure on screen is correct, and that is the architecture paying
 out rather than a claim about the model. Both places a model is consulted are guarded: a
 low-confidence intent asks instead of assuming, and an explanation whose prose does not byte-match
@@ -773,6 +773,14 @@ the verified rows is thrown away for the template. The specific thing a smaller 
 because check 3 tokenises the prose rather than trusting the declared value. You get the template.
 You never get a rounded figure presented as verified
 ([D-57](docs/decisions.md#d-57--a-second-provider-and-why-a-weaker-model-is-a-quality-question-not-a-correctness-one)).
+
+One honest caveat about the free tier specifically. Groq caps free models at **8,000 tokens per
+minute**. Intent parsing is ~1,000 tokens and fits; the explainer carries the whole evidence brief,
+~8,700 tokens for a five-tool diagnosis, and does not. So on a free key the model parses your
+question — windows, comparison period, confidence — and the answer is rendered from the
+deterministic template. That is not a broken setup, it is the Phase 7 degradation reached by a
+boring route, and the run still completes with every figure verified and clickable. Groq's dev tier
+or an Anthropic key runs both halves.
 
 **Next: Phase 10 — failure and recovery.** Fault injection for each of the seven degradation rows,
 `PARTIAL` rendering that shows unavailable metrics as unavailable rather than blank or zero, and

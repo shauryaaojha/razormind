@@ -43,13 +43,17 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-sonnet-5"
 
-    #: Groq serves open-weight models on a free tier. 70B rather than 8B
-    #: because the smaller model degrades on the explainer, and the way it
-    #: degrades is a claim whose prose rounds a figure its own structured field
-    #: got right -- which the grounding gate catches, but only by discarding the
-    #: answer (D-57).
+    #: Groq serves open-weight models on a free tier. The largest one that
+    #: supports a forced tool call, because the smaller ones degrade on the
+    #: explainer, and the way they degrade is a claim whose prose rounds a
+    #: figure its own structured field got right -- which the grounding gate
+    #: catches, but only by discarding the answer (D-57).
+    #:
+    #: Groq's catalogue moves. `GET /openai/v1/models` on your own key is the
+    #: only authority on what it currently holds; a retired model is a 404 at
+    #: request time, not a startup failure.
     groq_api_key: str | None = None
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "openai/gpt-oss-120b"
 
     #: Below this, the intent parser asks rather than assumes
     #: (docs/05-agent-runtime.md#intent). Guessing a comparison period is the

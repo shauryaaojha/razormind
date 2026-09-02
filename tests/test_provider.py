@@ -37,7 +37,7 @@ SCHEMA: dict[str, Any] = {
 
 def _payload(arguments: str, *, name: str = "emit") -> dict[str, Any]:
     return {
-        "model": "llama-3.3-70b-versatile",
+        "model": "openai/gpt-oss-120b",
         "choices": [
             {
                 "message": {
@@ -68,7 +68,7 @@ def _payload(arguments: str, *, name: str = "emit") -> dict[str, Any]:
 def _provider(handler: Handler) -> GroqProvider:
     return GroqProvider(
         "gsk_test",
-        "llama-3.3-70b-versatile",
+        "openai/gpt-oss-120b",
         transport=httpx.MockTransport(handler),
     )
 
@@ -93,7 +93,7 @@ async def test_a_forced_tool_call_round_trips() -> None:
     completion = await _call(_provider(handler))
 
     assert json.loads(completion.text) == {"window": "2024-07"}
-    assert completion.model == "llama-3.3-70b-versatile"
+    assert completion.model == "openai/gpt-oss-120b"
     assert completion.input_tokens == 411
     assert completion.output_tokens == 37
 
@@ -110,7 +110,7 @@ async def test_the_request_forces_the_named_tool_and_carries_the_schema() -> Non
     await _call(_provider(handler))
 
     assert seen["authorization"] == "Bearer gsk_test"
-    assert seen["model"] == "llama-3.3-70b-versatile"
+    assert seen["model"] == "openai/gpt-oss-120b"
     assert seen["tool_choice"] == {"type": "function", "function": {"name": "emit"}}
     assert seen["tools"][0]["function"]["name"] == "emit"
     assert seen["tools"][0]["function"]["parameters"] == SCHEMA
@@ -141,7 +141,7 @@ async def test_a_prose_answer_is_a_named_failure_not_a_key_error() -> None:
         return httpx.Response(
             200,
             json={
-                "model": "llama-3.3-70b-versatile",
+                "model": "openai/gpt-oss-120b",
                 "choices": [{"message": {"role": "assistant", "content": "I cannot help."}}],
                 "usage": {"prompt_tokens": 10, "completion_tokens": 4},
             },

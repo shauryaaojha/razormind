@@ -134,7 +134,11 @@ async def explain(
                 timeout_seconds=timeout_seconds,
             )
         except ProviderError as error:
-            return _fallback(fallback, published, literals, attempt - 1, error.code, tuple(spent))
+            # The whole message, not just the code. "PROVIDER_UNAVAILABLE" on
+            # its own cannot tell a missing key from a retired model from a
+            # rate limit, and those want three different responses from whoever
+            # reads the event log. The code stays the prefix.
+            return _fallback(fallback, published, literals, attempt - 1, str(error), tuple(spent))
 
         spent.append(completion)
         try:
