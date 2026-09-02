@@ -80,6 +80,9 @@ services:
     # is already running is two installs racing on one directory. If the dev
     # server starts 500ing on modules that are plainly installed, that is what
     # happened: `docker compose rm -sf web && docker volume rm razormind_webmodules`.
+    #
+    # `next build` in this container while the dev server runs is the same
+    # race, on `.next` instead, and ends the same way. Restart after one.
     command: sh -c "npm install --legacy-peer-deps --no-audit --no-fund && npm run dev -- --hostname 0.0.0.0"
     depends_on:
       - api

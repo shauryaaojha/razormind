@@ -2,24 +2,17 @@
 
 /** Every investigation this merchant has run, newest first. */
 
-import {
-  Alert,
-  Badge,
-  Box,
-  Card,
-  CardBody,
-  EmptyState,
-  Spinner,
-  Text,
-} from "@razorpay/blade/components";
-import { ArrowRight, Clock, FileText, History as HistoryIcon, Play, Search } from "lucide-react";
-import Link from "next/link";
+import { Alert, Badge, Spinner } from "@razorpay/blade/components";
 import type { ExecutionLine } from "@shared/api";
+import { History as HistoryIcon, Play, Search } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { useAppTheme } from "@/app/providers";
+import { useTheme } from "@/app/providers";
 import { Shell } from "@/components/Shell";
+import { EmptyState, Panel, Pill, Row, Stack } from "@/components/ui";
 import { listExecutions } from "@/lib/api";
+import { numeric, radius, space, transition } from "@/lib/theme";
 
 const COLOUR: Record<string, "positive" | "negative" | "notice" | "neutral"> = {
   COMPLETED: "positive",
@@ -30,7 +23,7 @@ const COLOUR: Record<string, "positive" | "negative" | "notice" | "neutral"> = {
 };
 
 export default function HistoryPage() {
-  const { isDark } = useAppTheme();
+  const { t } = useTheme();
   const [items, setItems] = useState<ExecutionLine[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -51,54 +44,40 @@ export default function HistoryPage() {
 
   return (
     <Shell
-      title="Investigation History & Audit Trail"
-      subtitle="Every run is replayable through the exact append-only execution event log."
-    >
-      {/* Search & Filter Header */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: "16px",
-          flexWrap: "wrap",
-        }}
-      >
+      title="History"
+      subtitle="Every run replays from the same append-only event log the live page reads, through the same component."
+      action={
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            gap: "8px",
-            padding: "8px 14px",
-            borderRadius: "8px",
-            backgroundColor: isDark ? "#0E131F" : "#FFFFFF",
-            border: `1px solid ${isDark ? "#1E293B" : "#E2E8F0"}`,
-            flex: 1,
-            maxWidth: "400px",
+            gap: space(2),
+            padding: `${space(2)} ${space(3)}`,
+            borderRadius: radius.md,
+            backgroundColor: t.surface,
+            border: `1px solid ${t.border}`,
+            minWidth: "260px",
           }}
         >
-          <Search size={15} color={isDark ? "#94A3B8" : "#64748B"} />
+          <Search size={15} color={t.textFaint} />
           <input
-            type="text"
-            placeholder="Search past questions..."
+            type="search"
+            placeholder="Search past questions…"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(event) => setSearch(event.target.value)}
             style={{
               background: "transparent",
               border: "none",
               outline: "none",
-              color: isDark ? "#F8FAFC" : "#0F172A",
+              color: t.text,
+              font: "inherit",
               fontSize: "13px",
               width: "100%",
             }}
           />
         </div>
-
-        <span style={{ fontSize: "12px", color: isDark ? "#94A3B8" : "#64748B" }}>
-          Showing <strong>{filtered.length}</strong> past investigations
-        </span>
-      </div>
-
+      }
+    >
       {error ? (
         <Alert isFullWidth color="negative" title="Cannot list runs" description={error} />
       ) : null}
@@ -106,82 +85,92 @@ export default function HistoryPage() {
       {!items ? (
         <Spinner accessibilityLabel="Loading history" size="medium" />
       ) : filtered.length === 0 ? (
-        <EmptyState
-          title="No investigations found"
-          description="Ask a financial question in the AI Studio and it will appear here."
-        />
+        <Panel>
+          <EmptyState
+            icon={<HistoryIcon size={26} />}
+            title={search ? "No run matches that" : "No investigations yet"}
+            body={
+              search
+                ? "Try a different word, or clear the search to see everything."
+                : "Ask a question on the Ask page and every run will be listed here, replayable."
+            }
+          />
+        </Panel>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+        <Stack gap={2.5}>
           {filtered.map((item) => (
-            <div
+            <Link
               key={item.execution_id}
+              href={`/history/${item.execution_id}`}
               style={{
-                padding: "16px 20px",
-                borderRadius: "10px",
-                backgroundColor: isDark ? "#0E131F" : "#FFFFFF",
-                border: `1px solid ${isDark ? "#1E293B" : "#E2E8F0"}`,
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                flexWrap: "wrap",
-                gap: "12px",
-                transition: "all 0.15s ease",
+                textDecoration: "none",
+                color: "inherit",
+                display: "block",
+                padding: `${space(4)} ${space(5)}`,
+                borderRadius: radius.md,
+                backgroundColor: t.surface,
+                border: `1px solid ${t.border}`,
+                transition: `border-color ${transition.fast}, background-color ${transition.fast}`,
+              }}
+              onMouseEnter={(event) => {
+                event.currentTarget.style.borderColor = t.accentBorder;
+                event.currentTarget.style.backgroundColor = t.surfaceHover;
+              }}
+              onMouseLeave={(event) => {
+                event.currentTarget.style.borderColor = t.border;
+                event.currentTarget.style.backgroundColor = t.surface;
               }}
             >
-              <div style={{ display: "flex", flexDirection: "column", gap: "6px", flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-                  <Badge color={COLOUR[item.status] ?? "neutral"}>{item.status}</Badge>
-                  {item.response_source ? (
-                    <Badge color="neutral" size="small">
-                      {item.response_source === "LLM" ? "model" : "template"}
-                    </Badge>
-                  ) : null}
-                  <span style={{ fontSize: "11px", color: isDark ? "#94A3B8" : "#64748B", fontFamily: "JetBrains Mono, monospace" }}>
-                    {item.created_at.slice(0, 19).replace("T", " ")}
-                  </span>
-                </div>
-
-                <Link
-                  href={`/history/${item.execution_id}`}
-                  style={{
-                    fontSize: "14px",
-                    fontWeight: 600,
-                    color: "#0C83FF",
-                    textDecoration: "none",
-                  }}
-                >
-                  {item.question}
-                </Link>
-
-                {item.period_from ? (
-                  <span style={{ fontSize: "11px", color: isDark ? "#64748B" : "#94A3B8", fontFamily: "JetBrains Mono, monospace" }}>
-                    Window: [{item.period_from}, {item.period_to})
-                  </span>
-                ) : null}
-              </div>
-
-              <Link
-                href={`/history/${item.execution_id}`}
+              <div
                 style={{
                   display: "flex",
+                  justifyContent: "space-between",
                   alignItems: "center",
-                  gap: "6px",
-                  padding: "6px 14px",
-                  borderRadius: "6px",
-                  backgroundColor: isDark ? "#141C2B" : "#F1F5F9",
-                  color: isDark ? "#F8FAFC" : "#0F172A",
-                  fontSize: "12px",
-                  fontWeight: 600,
-                  textDecoration: "none",
-                  border: `1px solid ${isDark ? "#1E293B" : "#CBD5E1"}`,
+                  gap: space(4),
+                  flexWrap: "wrap",
                 }}
               >
-                <span>Replay Trace</span>
-                <Play size={12} fill="#0C83FF" color="#0C83FF" />
-              </Link>
-            </div>
+                <Stack gap={2} style={{ flex: 1, minWidth: "min(100%, 320px)" }}>
+                  <Row gap={2}>
+                    <Badge color={COLOUR[item.status] ?? "neutral"}>{item.status}</Badge>
+                    {item.response_source ? (
+                      <Pill tone={item.response_source === "LLM" ? "info" : "neutral"}>
+                        {item.response_source === "LLM" ? "model" : "template"}
+                      </Pill>
+                    ) : null}
+                    <span style={{ ...numeric, fontSize: "11.5px", color: t.textFaint }}>
+                      {item.created_at.slice(0, 19).replace("T", " ")}
+                    </span>
+                  </Row>
+
+                  <span style={{ fontSize: "14.5px", fontWeight: 600, color: t.text, lineHeight: 1.45 }}>
+                    {item.question}
+                  </span>
+
+                  {item.period_from ? (
+                    <span style={{ ...numeric, fontSize: "11.5px", color: t.textFaint }}>
+                      [{item.period_from}, {item.period_to})
+                    </span>
+                  ) : null}
+                </Stack>
+
+                <span
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: space(1.5),
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    color: t.accent,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Replay <Play size={12} fill="currentColor" />
+                </span>
+              </div>
+            </Link>
           ))}
-        </div>
+        </Stack>
       )}
     </Shell>
   );

@@ -8,28 +8,30 @@
  * something on screen.
  */
 
-import { Alert, Badge, Box, Button, Card, CardBody, Text, TextInput } from "@razorpay/blade/components";
-import { ArrowRight, HelpCircle, Info, MessageSquare, Search, Sparkles, Zap } from "lucide-react";
+import { Alert } from "@razorpay/blade/components";
 import type { ExecutionSummary } from "@shared/api";
+import { ArrowUp, Info, Search } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { useAppTheme } from "@/app/providers";
+import { useTheme } from "@/app/providers";
 import { ExecutionView } from "@/components/ExecutionView";
 import { ProvenanceDrawer } from "@/components/ProvenanceDrawer";
 import { Shell } from "@/components/Shell";
+import { Panel, Row, Stack } from "@/components/ui";
 import { USER_ID, eventStreamUrl, readExecution, startRun } from "@/lib/api";
 import { readEventStream, type StreamHandle, type TraceEvent } from "@/lib/stream";
+import { radius, space, transition } from "@/lib/theme";
 import { isFinished } from "@/lib/trace";
 
 const SUGGESTIONS = [
-  "Why did net revenue fall in August?",
-  "How is reconciliation looking for August?",
-  "What happened to our payment success rate?",
-  "Check fee discrepancies on zero-MDR transactions",
+  "Why did net revenue fall in July 2026 compared with June 2026?",
+  "How is reconciliation looking for July 2026?",
+  "What happened to our payment success rate in July 2026?",
+  "Which refund reasons drove the most value in July 2026?",
 ];
 
 export default function AskPage() {
-  const { isDark } = useAppTheme();
+  const { t } = useTheme();
   const [question, setQuestion] = useState("");
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [events, setEvents] = useState<TraceEvent[]>([]);
@@ -84,121 +86,137 @@ export default function AskPage() {
     };
   }, [executionId, events]);
 
+  const canSend = Boolean(question.trim()) && !busy;
+
   return (
     <Shell
-      title="AI Financial Investigation Studio"
-      subtitle="Every figure in the answer is computed deterministically, verified across 5 layers, and clickable down to source records."
+      title="Ask"
+      subtitle="Every figure in the answer is computed deterministically, verified across five layers, and clickable down to the source records it came from."
     >
-      {/* Query Card */}
-      <div
-        style={{
-          padding: "24px",
-          borderRadius: "14px",
-          backgroundColor: isDark ? "#0E131F" : "#FFFFFF",
-          border: `1px solid ${isDark ? "#1E293B" : "#E2E8F0"}`,
-          display: "flex",
-          flexDirection: "column",
-          gap: "16px",
-          boxShadow: isDark ? "0 4px 24px rgba(0,0,0,0.3)" : "0 4px 20px rgba(0,0,0,0.04)",
-        }}
-      >
-        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          <label
+      <Panel padding={0}>
+        <Stack gap={0}>
+          <div
             style={{
-              fontSize: "13px",
-              fontWeight: 600,
-              color: isDark ? "#F8FAFC" : "#0F172A",
               display: "flex",
-              alignItems: "center",
-              gap: "6px",
+              alignItems: "flex-end",
+              gap: space(3),
+              padding: space(4),
             }}
           >
-            <Search size={15} color="#0C83FF" />
-            <span>Investigate Financial Query</span>
-          </label>
-
-          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-            <div style={{ flex: 1, minWidth: "280px" }}>
-              <TextInput
-                label=""
-                placeholder="Ask about revenue movement, decline causes, or reconciliation health..."
-                value={question}
-                onChange={({ value }) => setQuestion(value ?? "")}
-                isDisabled={busy}
-              />
-            </div>
-            <button
-              onClick={() => void ask(question)}
-              disabled={busy || !question.trim()}
+            <Search size={17} color={t.textFaint} style={{ marginBottom: space(2.5) }} />
+            <textarea
+              value={question}
+              rows={1}
+              disabled={busy}
+              placeholder="Ask about revenue movement, decline causes, or reconciliation health…"
+              onChange={(event) => {
+                setQuestion(event.target.value);
+                event.target.style.height = "auto";
+                event.target.style.height = `${Math.min(event.target.scrollHeight, 160)}px`;
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void ask(question);
+                }
+              }}
               style={{
-                padding: "10px 24px",
-                borderRadius: "8px",
-                backgroundColor: "#0C83FF",
-                color: "#FFFFFF",
-                fontWeight: 600,
-                fontSize: "14px",
+                flex: 1,
+                resize: "none",
+                appearance: "none",
                 border: "none",
-                cursor: busy || !question.trim() ? "not-allowed" : "pointer",
-                opacity: busy || !question.trim() ? 0.6 : 1,
-                boxShadow: "0 2px 10px rgba(12, 131, 255, 0.35)",
+                outline: "none",
+                background: "transparent",
+                color: t.text,
+                font: "inherit",
+                fontSize: "15px",
+                lineHeight: 1.6,
+                padding: `${space(2)} 0`,
+                maxHeight: "160px",
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => void ask(question)}
+              disabled={!canSend}
+              aria-label="Run the investigation"
+              style={{
                 display: "flex",
                 alignItems: "center",
-                gap: "8px",
-                transition: "all 0.15s ease",
+                justifyContent: "center",
+                width: "34px",
+                height: "34px",
+                flexShrink: 0,
+                borderRadius: radius.md,
+                border: "none",
+                backgroundColor: canSend ? t.accent : t.surfaceHover,
+                color: canSend ? t.textOnAccent : t.textFaint,
+                boxShadow: canSend ? t.shadowAccent : "none",
+                cursor: canSend ? "pointer" : "not-allowed",
+                transition: `background-color ${transition.fast}, box-shadow ${transition.fast}`,
               }}
             >
-              <Zap size={16} />
-              <span>{busy ? "Investigating..." : "Investigate"}</span>
+              <ArrowUp size={17} strokeWidth={2.5} />
             </button>
           </div>
-        </div>
 
-        {/* Suggestion Pills */}
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-          <span style={{ fontSize: "12px", color: isDark ? "#94A3B8" : "#64748B", fontWeight: 500 }}>
-            Suggested:
-          </span>
-          {SUGGESTIONS.map((suggestion) => (
-            <button
-              key={suggestion}
-              disabled={busy}
-              onClick={() => {
-                setQuestion(suggestion);
-                void ask(suggestion);
-              }}
-              style={{
-                padding: "5px 12px",
-                borderRadius: "20px",
-                fontSize: "12px",
-                fontWeight: 500,
-                border: `1px solid ${isDark ? "#1E293B" : "#E2E8F0"}`,
-                backgroundColor: isDark ? "#141C2B" : "#F8FAFC",
-                color: isDark ? "#CBD5E1" : "#334155",
-                cursor: busy ? "not-allowed" : "pointer",
-                transition: "all 0.15s ease",
-              }}
-            >
-              {suggestion}
-            </button>
-          ))}
-        </div>
+          <div
+            style={{
+              borderTop: `1px solid ${t.border}`,
+              padding: `${space(3)} ${space(4)}`,
+              backgroundColor: t.sunken,
+              borderBottomLeftRadius: radius.lg,
+              borderBottomRightRadius: radius.lg,
+            }}
+          >
+            <Row gap={2}>
+              {SUGGESTIONS.map((suggestion) => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setQuestion(suggestion);
+                    void ask(suggestion);
+                  }}
+                  style={{
+                    padding: `${space(1.5)} ${space(3)}`,
+                    borderRadius: radius.pill,
+                    fontSize: "12px",
+                    fontWeight: 500,
+                    border: `1px solid ${t.border}`,
+                    backgroundColor: t.surface,
+                    color: t.textMuted,
+                    cursor: busy ? "not-allowed" : "pointer",
+                    opacity: busy ? 0.5 : 1,
+                    transition: `border-color ${transition.fast}, color ${transition.fast}`,
+                  }}
+                  onMouseEnter={(event) => {
+                    if (busy) return;
+                    event.currentTarget.style.borderColor = t.accentBorder;
+                    event.currentTarget.style.color = t.text;
+                  }}
+                  onMouseLeave={(event) => {
+                    event.currentTarget.style.borderColor = t.border;
+                    event.currentTarget.style.color = t.textMuted;
+                  }}
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </Row>
+          </div>
+        </Stack>
+      </Panel>
 
-        <div
-          style={{
-            fontSize: "11px",
-            color: isDark ? "#64748B" : "#94A3B8",
-            display: "flex",
-            alignItems: "center",
-            gap: "6px",
-          }}
-        >
-          <Info size={13} />
-          <span>
-            With no model configured, the intent cannot be parsed and fails with PROVIDER_UNAVAILABLE
-            deliberately, rather than guessing which analysis you meant.
-          </span>
-        </div>
-      </div>
+      <Row gap={2} align="flex-start" style={{ fontSize: "12px", color: t.textFaint }}>
+        <Info size={14} style={{ flexShrink: 0, marginTop: "1px" }} />
+        <span style={{ lineHeight: 1.5, maxWidth: "80ch" }}>
+          The model only parses your question into an intent and phrases the result. If it is
+          unavailable, or the period is ambiguous, the run says so instead of guessing — and the
+          numbers are computed and verified either way.
+        </span>
+      </Row>
 
       {error ? (
         <Alert isFullWidth color="negative" title="Request failed" description={error} />

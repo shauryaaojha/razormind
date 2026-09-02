@@ -1,334 +1,245 @@
 "use client";
 
-import { Alert, Badge, Box, Button, Card, CardBody, Heading, Text } from "@razorpay/blade/components";
-import { Activity, AlertOctagon, CheckCircle2, Flame, Play, RefreshCw, ShieldAlert, ShieldCheck } from "lucide-react";
-import React, { useState } from "react";
+/**
+ * The eight degradation paths, and which of them you can watch happen today.
+ *
+ * This page previously ran a `setTimeout` and rendered a hand-written result
+ * object announcing that "the Grounding Gate caught the byte-mismatch" and
+ * "Invariant 4 upheld" — a simulation of proof, on the one page whose subject
+ * is proof, in a product whose whole claim is that a figure on screen can be
+ * walked down to a record. Nothing was injected and no backend was called.
+ *
+ * So it states what is real instead. Four rows are reachable right now and say
+ * how to reach them; the other four need the fault-injection switches, which
+ * are Phase 10. A row that cannot be demonstrated says so rather than
+ * pretending.
+ */
 
-import { useAppTheme } from "@/app/providers";
+import type { ReactNode } from "react";
+import Link from "next/link";
+import { AlertTriangle, ArrowRight, FlaskConical } from "lucide-react";
+
+import { useTheme } from "@/app/providers";
 import { Shell } from "@/components/Shell";
+import { Mono, Panel, PanelHeader, Pill, Row, Stack } from "@/components/ui";
+import { radius, space, type Tone } from "@/lib/theme";
+
+type Reachability =
+  /** You can cause this today, from this build. */
+  | { kind: "live"; how: ReactNode }
+  /** Needs the Phase 10 fault-injection switches. */
+  | { kind: "phase10" };
+
+interface Path {
+  failure: string;
+  response: string;
+  state: string;
+  tone: Tone;
+  reach: Reachability;
+}
+
+const PATHS: Path[] = [
+  {
+    failure: "Intent confidence below 0.75",
+    response: "Ask one clarifying question rather than guessing the window",
+    state: "NEEDS_CLARIFICATION",
+    tone: "warning",
+    reach: {
+      kind: "live",
+      how: (
+        <>
+          Ask <em>“why did net revenue fall?”</em> with no comparison period.
+        </>
+      ),
+    },
+  },
+  {
+    failure: "Plan invalid",
+    response: "Structured rejection; nothing runs",
+    state: "REJECTED",
+    tone: "negative",
+    reach: {
+      kind: "live",
+      how: <>Ask about a window outside the seeded data, such as August 2024.</>,
+    },
+  },
+  {
+    failure: "No model configured at intent time",
+    response: "Refuse; never invent an intent",
+    state: "FAILED · PROVIDER_UNAVAILABLE",
+    tone: "negative",
+    reach: {
+      kind: "live",
+      how: (
+        <>
+          Set <Mono>LLM_ENABLED=false</Mono> and ask anything.
+        </>
+      ),
+    },
+  },
+  {
+    failure: "Model unavailable, or grounding fails twice",
+    response: "Deterministic template over the verified metrics — degrade the prose, never the numbers",
+    state: "COMPLETED · TEMPLATE_FALLBACK",
+    tone: "info",
+    reach: {
+      kind: "live",
+      how: (
+        <>
+          Point <Mono>LLM_PROVIDER</Mono> at Groq: its free tier caps at 8,000 tokens a minute and
+          the evidence brief is larger, so the explainer falls back every time.
+        </>
+      ),
+    },
+  },
+  {
+    failure: "Reconciliation fails",
+    response: "The whole run fails; no downstream number is allowed to exist",
+    state: "FAILED",
+    tone: "negative",
+    reach: { kind: "phase10" },
+  },
+  {
+    failure: "A non-required tool fails",
+    response: "Continue, and mark that metric unavailable in the answer rather than blank or zero",
+    state: "PARTIAL → COMPLETED",
+    tone: "warning",
+    reach: { kind: "phase10" },
+  },
+  {
+    failure: "Verification fails",
+    response: "Block the explanation entirely — the reader sees no figures at all",
+    state: "BLOCKED",
+    tone: "negative",
+    reach: { kind: "phase10" },
+  },
+  {
+    failure: "A tool times out",
+    response: "Counted as a tool failure, not an exception; the DAG decides what still runs",
+    state: "PARTIAL → COMPLETED",
+    tone: "warning",
+    reach: { kind: "phase10" },
+  },
+];
 
 export default function SandboxPage() {
-  const { isDark } = useAppTheme();
-
-  const [toggles, setToggles] = useState({
-    failureTimeout: true,
-    corruptRevenue: false,
-    dbPartition: false,
-    hallucinationInjection: false,
-  });
-
-  const [isRunning, setIsRunning] = useState(false);
-  const [result, setResult] = useState<any>({
-    status: "PARTIAL -> COMPLETED",
-    summary:
-      "Payment failure analysis is unavailable (TOOL_TIMEOUT), so the net revenue decline could not be split between attempt volume and success rate.",
-    verifiedRevenue: "-₹83,301.00 (-17.60%)",
-    hallucinationCount: 0,
-    blockedNumbers: 0,
-    proof: "Invariant 4 upheld: No speculative guess or hallucinated figures were made for the missing metric.",
-  });
-
-  const handleRun = () => {
-    setIsRunning(true);
-    setTimeout(() => {
-      setIsRunning(false);
-      if (toggles.corruptRevenue) {
-        setResult({
-          status: "BLOCKED (Verification Layer 4 Mismatch)",
-          summary: "Layer 4/5 Formula Verifier detected an arithmetic mismatch. All prose generation was halted.",
-          verifiedRevenue: "BLOCKED (ZERO NUMBERS DISPLAYED)",
-          hallucinationCount: 0,
-          blockedNumbers: 1,
-          proof: "Invariant 4 on screen: When verification fails, zero fabricated figures are shown to the user.",
-        });
-      } else if (toggles.failureTimeout) {
-        setResult({
-          status: "PARTIAL -> COMPLETED",
-          summary:
-            "Payment failure analysis is unavailable (TOOL_TIMEOUT), so the net revenue decline could not be split between attempt volume and success rate.",
-          verifiedRevenue: "-₹83,301.00 (-17.60%)",
-          hallucinationCount: 0,
-          blockedNumbers: 0,
-          proof: "Invariant 4 upheld: Verified revenue bridge remains intact; missing rail split is explicitly stated.",
-        });
-      } else if (toggles.hallucinationInjection) {
-        setResult({
-          status: "COMPLETED (TEMPLATE_FALLBACK)",
-          summary:
-            "The model attempted to claim an unverified figure. The Grounding Gate caught the byte-mismatch and defaulted to deterministic template output.",
-          verifiedRevenue: "-₹83,301.00 (-17.60%)",
-          hallucinationCount: 1,
-          blockedNumbers: 0,
-          proof: "Grounding Gate active: Every claimed span in model prose must byte-match a verified metric.",
-        });
-      } else {
-        setResult({
-          status: "COMPLETED (5/5 Layers Passed)",
-          summary: "All tools executed successfully. Fully verified revenue attribution bridge generated.",
-          verifiedRevenue: "-₹83,301.00 (-17.60%)",
-          hallucinationCount: 0,
-          blockedNumbers: 0,
-          proof: "All deterministic invariants green (10/10).",
-        });
-      }
-    }, 1200);
-  };
+  const { t } = useTheme();
+  const live = PATHS.filter((path) => path.reach.kind === "live").length;
 
   return (
     <Shell
-      title="Chaos Engineering & Fault Injection Sandbox"
-      subtitle="Simulate downstream tool timeouts, corrupted database states, and verifier rejections to observe how RazorMind degrades gracefully without fabricating data."
+      title="Failure paths"
+      subtitle="What this system does when something breaks. The rule throughout is one sentence: degrade the prose, never the numbers."
     >
-      {/* Fault Injection Matrix */}
       <div
         style={{
-          padding: "24px",
-          borderRadius: "12px",
-          backgroundColor: isDark ? "#0E131F" : "#FFFFFF",
-          border: `1px solid ${isDark ? "#1E293B" : "#E2E8F0"}`,
           display: "flex",
-          flexDirection: "column",
-          gap: "18px",
+          alignItems: "flex-start",
+          gap: space(3.5),
+          padding: `${space(4)} ${space(5)}`,
+          borderRadius: radius.lg,
+          backgroundColor: t.warningSoft,
+          border: `1px solid ${t.border}`,
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <h2 style={{ margin: 0, fontSize: "18px", fontWeight: 700 }}>
-              Deterministic Resilience Toggles
-            </h2>
-            <p style={{ margin: "4px 0 0 0", fontSize: "13px", color: isDark ? "#94A3B8" : "#64748B" }}>
-              Toggle simulated failures to test the 5-layer trust boundary and grounding gate.
-            </p>
-          </div>
-          <span
-            style={{
-              fontSize: "11px",
-              fontWeight: 600,
-              padding: "4px 10px",
-              borderRadius: "6px",
-              backgroundColor: "rgba(245,158,11,0.12)",
-              color: "#F59E0B",
-              border: "1px solid rgba(245,158,11,0.25)",
-            }}
-          >
-            FAULT INJECTION READY
-          </span>
-        </div>
-
-        {/* Toggle rows */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-          {/* Row 1 */}
-          <div
-            style={{
-              padding: "14px 16px",
-              borderRadius: "8px",
-              backgroundColor: isDark ? "#141C2B" : "#F8FAFC",
-              border: `1px solid ${isDark ? "#1E293B" : "#E2E8F0"}`,
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-            }}
-          >
-            <div>
-              <div style={{ fontWeight: 600, fontSize: "14px" }}>
-                payments.failure_analysis · Tool Timeout
-              </div>
-              <div style={{ fontSize: "12px", color: isDark ? "#94A3B8" : "#64748B", marginTop: "2px" }}>
-                Simulates 5000ms delay causing tool timeout. Expected: PARTIAL status with explicit limitation note.
-              </div>
-            </div>
-            <button
-              onClick={() =>
-                setToggles((prev) => ({ ...prev, failureTimeout: !prev.failureTimeout }))
-              }
-              style={{
-                padding: "6px 14px",
-                borderRadius: "6px",
-                fontSize: "12px",
-                fontWeight: 600,
-                border: "none",
-                cursor: "pointer",
-                backgroundColor: toggles.failureTimeout ? "#F59E0B" : isDark ? "#232D3F" : "#E2E8F0",
-                color: toggles.failureTimeout ? "#000000" : isDark ? "#94A3B8" : "#475569",
-              }}
-            >
-              {toggles.failureTimeout ? "SIMULATING TIMEOUT (ON)" : "NORMAL (OFF)"}
-            </button>
-          </div>
-
-          {/* Row 2 */}
-          <div
-            style={{
-              padding: "14px 16px",
-              borderRadius: "8px",
-              backgroundColor: isDark ? "#141C2B" : "#F8FAFC",
-              border: `1px solid ${isDark ? "#1E293B" : "#E2E8F0"}`,
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-            }}
-          >
-            <div>
-              <div style={{ fontWeight: 600, fontSize: "14px" }}>
-                finance.revenue_analysis · Corrupt Formula Sum
-              </div>
-              <div style={{ fontSize: "12px", color: isDark ? "#94A3B8" : "#64748B", marginTop: "2px" }}>
-                Injects invalid paise sum in revenue bridge. Expected: Layer 4 formula verifier blocks output completely (Invariant 4).
-              </div>
-            </div>
-            <button
-              onClick={() =>
-                setToggles((prev) => ({ ...prev, corruptRevenue: !prev.corruptRevenue }))
-              }
-              style={{
-                padding: "6px 14px",
-                borderRadius: "6px",
-                fontSize: "12px",
-                fontWeight: 600,
-                border: "none",
-                cursor: "pointer",
-                backgroundColor: toggles.corruptRevenue ? "#EF4444" : isDark ? "#232D3F" : "#E2E8F0",
-                color: toggles.corruptRevenue ? "#FFFFFF" : isDark ? "#94A3B8" : "#475569",
-              }}
-            >
-              {toggles.corruptRevenue ? "CORRUPTED (ON)" : "CLEAN (OFF)"}
-            </button>
-          </div>
-
-          {/* Row 3 */}
-          <div
-            style={{
-              padding: "14px 16px",
-              borderRadius: "8px",
-              backgroundColor: isDark ? "#141C2B" : "#F8FAFC",
-              border: `1px solid ${isDark ? "#1E293B" : "#E2E8F0"}`,
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-            }}
-          >
-            <div>
-              <div style={{ fontWeight: 600, fontSize: "14px" }}>
-                Grounding Gate · Inject Hallucinated Token
-              </div>
-              <div style={{ fontSize: "12px", color: isDark ? "#94A3B8" : "#64748B", marginTop: "2px" }}>
-                Forces LLM to claim an ungrounded metric. Expected: Gate catches mismatch and forces TEMPLATE_FALLBACK.
-              </div>
-            </div>
-            <button
-              onClick={() =>
-                setToggles((prev) => ({
-                  ...prev,
-                  hallucinationInjection: !prev.hallucinationInjection,
-                }))
-              }
-              style={{
-                padding: "6px 14px",
-                borderRadius: "6px",
-                fontSize: "12px",
-                fontWeight: 600,
-                border: "none",
-                cursor: "pointer",
-                backgroundColor: toggles.hallucinationInjection
-                  ? "#6366F1"
-                  : isDark
-                    ? "#232D3F"
-                    : "#E2E8F0",
-                color: toggles.hallucinationInjection ? "#FFFFFF" : isDark ? "#94A3B8" : "#475569",
-              }}
-            >
-              {toggles.hallucinationInjection ? "INJECTED (ON)" : "BYPASS (OFF)"}
-            </button>
-          </div>
-        </div>
-
-        {/* Action Trigger */}
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "8px" }}>
-          <button
-            onClick={handleRun}
-            disabled={isRunning}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              padding: "10px 20px",
-              borderRadius: "8px",
-              backgroundColor: "#F59E0B",
-              color: "#000000",
-              fontWeight: 700,
-              fontSize: "13px",
-              border: "none",
-              cursor: isRunning ? "wait" : "pointer",
-              boxShadow: "0 2px 10px rgba(245, 158, 11, 0.3)",
-            }}
-          >
-            <Activity size={16} />
-            <span>{isRunning ? "Running Chaos Test..." : "Run Chaos Test Investigation"}</span>
-          </button>
-        </div>
+        <AlertTriangle size={18} color={t.warning} style={{ flexShrink: 0, marginTop: "2px" }} />
+        <span style={{ fontSize: "13px", lineHeight: 1.6, color: t.text }}>
+          <strong>Fault injection is not built yet.</strong> {live} of the {PATHS.length} paths below
+          can be triggered against this build today, and each says how. The rest need the injection
+          switches, which are Phase&nbsp;10. This page deliberately shows no simulated results —
+          a mocked proof of verification would be worth less than none.
+        </span>
       </div>
 
-      {/* Result Container */}
-      {result && (
-        <div
-          style={{
-            padding: "24px",
-            borderRadius: "12px",
-            backgroundColor: isDark ? "#0E131F" : "#FFFFFF",
-            border: `1px solid ${isDark ? "#1E293B" : "#E2E8F0"}`,
-            display: "flex",
-            flexDirection: "column",
-            gap: "14px",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h3 style={{ margin: 0, fontSize: "16px", fontWeight: 700 }}>
-              Resilience & Degradation Result
-            </h3>
-            <span
+      <Panel>
+        <PanelHeader
+          title="The recovery matrix"
+          icon={<FlaskConical size={15} />}
+          hint="From docs/05-agent-runtime.md. Every row is a real branch in the runtime, not an aspiration."
+        />
+
+        <Stack gap={2.5}>
+          {PATHS.map((path) => (
+            <div
+              key={path.failure}
               style={{
-                fontSize: "12px",
-                fontWeight: 600,
-                padding: "3px 8px",
-                borderRadius: "6px",
-                backgroundColor: result.status.includes("BLOCKED")
-                  ? "rgba(239,68,68,0.12)"
-                  : "rgba(245,158,11,0.12)",
-                color: result.status.includes("BLOCKED") ? "#EF4444" : "#F59E0B",
+                padding: `${space(3.5)} ${space(4)}`,
+                borderRadius: radius.md,
+                backgroundColor: t.sunken,
+                border: `1px solid ${t.border}`,
+                display: "flex",
+                flexDirection: "column",
+                gap: space(2),
               }}
             >
-              {result.status}
-            </span>
-          </div>
+              <Row gap={2.5} style={{ justifyContent: "space-between" }}>
+                <span style={{ fontSize: "13.5px", fontWeight: 600, color: t.text }}>
+                  {path.failure}
+                </span>
+                <Row gap={2} wrap={false}>
+                  <Pill tone={path.tone}>{path.state}</Pill>
+                  <Pill tone={path.reach.kind === "live" ? "positive" : "neutral"}>
+                    {path.reach.kind === "live" ? "reachable now" : "Phase 10"}
+                  </Pill>
+                </Row>
+              </Row>
 
-          <div
-            style={{
-              padding: "12px 16px",
-              borderRadius: "8px",
-              backgroundColor: isDark ? "#141C2B" : "#F8FAFC",
-              fontSize: "13px",
-              lineHeight: 1.6,
-              color: isDark ? "#CBD5E1" : "#334155",
-            }}
-          >
-            {result.summary}
-          </div>
+              <span style={{ fontSize: "12.5px", color: t.textMuted, lineHeight: 1.55 }}>
+                {path.response}
+              </span>
 
-          <div
+              {path.reach.kind === "live" ? (
+                <span
+                  style={{
+                    fontSize: "12px",
+                    color: t.textFaint,
+                    lineHeight: 1.55,
+                    paddingTop: space(1),
+                    borderTop: `1px solid ${t.border}`,
+                  }}
+                >
+                  <strong style={{ color: t.textMuted }}>Try it: </strong>
+                  {path.reach.how}
+                </span>
+              ) : null}
+            </div>
+          ))}
+        </Stack>
+      </Panel>
+
+      <Panel>
+        <PanelHeader
+          title="Why the two model failures are not one case"
+          hint="Losing the model at explanation time costs phrasing. Losing it at intent time costs the question."
+        />
+        <p style={{ margin: 0, fontSize: "13.5px", lineHeight: 1.7, color: t.textMuted, maxWidth: "78ch" }}>
+          The template can render verified metrics without a model, so an explainer that dies is a
+          prose problem. Nothing can render a question nobody parsed — the only thing that knows
+          which analysis was asked for is the model — so an intent parser that dies is the end of
+          the run. A canned intent would answer a question nobody asked, verified and cited, with
+          nothing anywhere indicating that no model was consulted.
+        </p>
+        <div style={{ marginTop: space(4) }}>
+          <Link
+            href="/"
             style={{
-              display: "flex",
+              display: "inline-flex",
               alignItems: "center",
-              gap: "8px",
-              fontSize: "12px",
-              color: "#10B981",
+              gap: space(1.5),
+              padding: `${space(2)} ${space(4)}`,
+              borderRadius: radius.md,
+              backgroundColor: t.accent,
+              color: t.textOnAccent,
+              fontSize: "13px",
               fontWeight: 600,
+              textDecoration: "none",
+              boxShadow: t.shadowAccent,
             }}
           >
-            <ShieldCheck size={16} />
-            <span>{result.proof}</span>
-          </div>
+            Try one of the reachable paths <ArrowRight size={14} />
+          </Link>
         </div>
-      )}
+      </Panel>
     </Shell>
   );
 }

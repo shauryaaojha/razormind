@@ -1297,3 +1297,59 @@ refusal are different problems with different fixes, and the code alone cannot t
 **Cost to reverse.** The provider, low — delete the class and two settings. The two grounding fixes
 are not reversible and should not be: they were defects, and the only reason they survived to Phase
 9 is that no real model had ever been asked to satisfy them.
+
+---
+
+### D-59 — The web app gets a token layer, and three pages stop inventing their numbers
+
+**Decision.** `apps/web/lib/theme.ts` holds every colour, radius, spacing step, shadow and numeric
+type treatment, as one palette per scheme. `components/ui.tsx` holds the handful of surfaces this
+app repeats. Nothing else in `apps/web` contains a `#`. Blade keeps the components; this owns the
+ground they sit on.
+
+**Why.** The app had accumulated **273 literal hex values and 125 `isDark ? a : b` ternaries**
+across ten files. That is not a theme, it is 125 independent decisions about what "muted text"
+means, and they had already drifted — three greys for one role, four radii, two definitions of a
+card. The pages looked like different products because they were built from different materials.
+The token layer is the whole fix; the visual work on top of it took a fraction of the time.
+
+Two things fell out that are worth more than the colours. Every figure is now `tabular-nums`, which
+is the cheapest correctness-adjacent change in the interface: a reader comparing two rupee amounts
+does it by eye down a column, and proportional digits make that column ragged. And the answer is
+laid out as flowing prose with claims **inline** rather than as a stack of boxed figures — a claim
+is a span *of a sentence*, so lifting it out of the sentence loses the argument the paragraph was
+making.
+
+**Three pages were showing numbers that came from nowhere.** This is the part that mattered.
+
+The dashboard was **entirely hardcoded** — every KPI a literal, including figures that no longer
+matched the data (it showed `₹3,90,122.95` for a window described as August, and labelled a seeded
+fixture a "Razorpay Live Merchant"). In a product whose entire claim is that a number on screen can
+be walked down to the records it came from, a tile of hand-typed digits rendered in the same visual
+language as a verified one teaches the reader that the visual language means nothing. It now reads
+published evidence, as the reconciliation page already did (D-56), and every tile opens.
+
+The calibration page hardcoded a fee schedule **the API already serves**, with prettier labels than
+the API's own — two descriptions of one rate, on the page whose entire subject is that a parameter
+must carry a provenance tag. When they drifted, the prettier one would have won, silently.
+
+The sandbox ran a `setTimeout` and rendered a hand-written result object announcing that "the
+Grounding Gate caught the byte-mismatch" and "Invariant 4 upheld". Nothing was injected and no
+backend was called. A simulated proof of verification, on the page whose subject is proof, is worth
+less than no page at all. It now states which four of the eight recovery paths are reachable
+against this build and how to reach each, and says plainly that injection is Phase 10.
+
+**Two D-54 violations, fixed at the source.** The exception explorer and the fee schedule were both
+dividing paise by 100 in TypeScript, because `ExceptionItem` and `FeeRuleView` were the two
+payloads carrying money with no rendered `display` beside it. Rather than format in the web app,
+both routes now render with `canonical()` like every other money-bearing response. D-54 held
+everywhere a *metric* appeared and leaked through the two payloads nobody thought of as money.
+
+**A real bug the redesign surfaced.** Taking "the current window" to be the newest `period_from` in
+an execution's evidence is wrong: reconciliation runs on a settlement-lagged window that ends after
+the analysis window, so the newest row belongs to `bank_count` and every revenue metric matched
+against it comes back empty. The rule is the latest window **per metric** — the only one that does
+not assume the tools agree on a calendar.
+
+**Cost to reverse.** The token layer, high and pointless: it deletes 273 decisions. The three data
+fixes, not reversible — they were defects.

@@ -4,27 +4,25 @@
  * Where a number comes from, all the way down.
  *
  * One recursive renderer with no knowledge of revenue, refunds or
- * reconciliation.
+ * reconciliation. Every level either declares a formula -- in which case its
+ * operands are more levels -- or declares a fold, in which case it cites records
+ * and the walk stops.
+ *
+ * The verification summary is read from `detail.verification_checks`. It used to
+ * be a hardcoded "5/5 layers passed" banner sitting directly above the array
+ * that actually says which checks ran, which is a decoration asserting the one
+ * thing this whole product exists to prove rather than showing it.
  */
 
-import {
-  Alert,
-  Badge,
-  Box,
-  Divider,
-  Drawer,
-  DrawerBody,
-  DrawerHeader,
-  Heading,
-  Spinner,
-  Text,
-} from "@razorpay/blade/components";
-import { CheckCircle2, Database, GitBranch, Layers, ShieldCheck } from "lucide-react";
+import { Alert, Badge, Drawer, DrawerBody, DrawerHeader, Spinner } from "@razorpay/blade/components";
 import type { EvidenceDetail, ProvenanceLevel } from "@shared/api";
+import { ChevronRight, Database, ShieldCheck } from "lucide-react";
 import React, { useEffect, useState } from "react";
 
-import { useAppTheme } from "@/app/providers";
+import { useTheme } from "@/app/providers";
+import { Mono, Pill, Row, SectionLabel, Stack } from "@/components/ui";
 import { readEvidence } from "@/lib/api";
+import { numeric, radius, space } from "@/lib/theme";
 
 export function ProvenanceDrawer({
   executionId,
@@ -35,16 +33,19 @@ export function ProvenanceDrawer({
   evidenceId: string | null;
   onDismiss: () => void;
 }) {
-  const { isDark } = useAppTheme();
+  const { t } = useTheme();
   const [detail, setDetail] = useState<EvidenceDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [showChecks, setShowChecks] = useState(false);
 
   useEffect(() => {
     if (!evidenceId) return;
     let live = true;
     setDetail(null);
     setError(null);
+    setSearch("");
+    setShowChecks(false);
     readEvidence(executionId, evidenceId)
       .then((loaded) => live && setDetail(loaded))
       .catch((failure: Error) => live && setError(failure.message));
@@ -53,7 +54,8 @@ export function ProvenanceDrawer({
     };
   }, [executionId, evidenceId]);
 
-  const filteredRecords = detail?.source_record_ids.filter((id) =>
+  const records = detail?.source_record_ids ?? [];
+  const filtered = records.filter((id) =>
     search ? id.toLowerCase().includes(search.toLowerCase()) : true,
   );
 
@@ -66,72 +68,140 @@ export function ProvenanceDrawer({
         ) : !detail ? (
           <Spinner accessibilityLabel="Loading the evidence chain" size="medium" />
         ) : (
-          <Box display="flex" flexDirection="column" gap="spacing.5">
-            {/* 5-layer verification indicator badge */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                padding: "8px 12px",
-                borderRadius: "8px",
-                backgroundColor: "rgba(16, 185, 129, 0.1)",
-                border: "1px solid rgba(16, 185, 129, 0.25)",
-                color: "#10B981",
-                fontSize: "12px",
-                fontWeight: 600,
-              }}
-            >
-              <ShieldCheck size={16} />
-              <span>5/5 Verification Layers Passed (Type, Range, Consistency, Formula, Source Fold)</span>
-            </div>
+          <Stack gap={5}>
+            {detail.verification_checks.length > 0 ? (
+              <div
+                style={{
+                  borderRadius: radius.md,
+                  backgroundColor: t.positiveSoft,
+                  border: `1px solid ${t.border}`,
+                  overflow: "hidden",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setShowChecks((open) => !open)}
+                  aria-expanded={showChecks}
+                  style={{
+                    appearance: "none",
+                    font: "inherit",
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: space(2),
+                    padding: `${space(2.5)} ${space(3)}`,
+                    background: "none",
+                    border: "none",
+                    color: t.positive,
+                    fontSize: "12.5px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  <ShieldCheck size={15} />
+                  <span style={{ flex: 1 }}>
+                    {detail.verification_checks.length.toLocaleString("en-IN")} verification checks
+                    passed
+                  </span>
+                  <ChevronRight
+                    size={14}
+                    style={{
+                      transform: showChecks ? "rotate(90deg)" : "none",
+                      transition: "transform 120ms",
+                    }}
+                  />
+                </button>
+                {showChecks ? (
+                  <ul
+                    style={{
+                      margin: 0,
+                      padding: `0 ${space(3)} ${space(3)} ${space(8)}`,
+                      listStyle: "none",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: space(1),
+                    }}
+                  >
+                    {detail.verification_checks.map((check) => (
+                      <li key={check} style={{ fontSize: "11.5px", color: t.textMuted }}>
+                        {check}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null}
 
             <Level node={detail.provenance} depth={0} />
 
-            <Divider />
+            {detail.rules_applied.length > 0 ? (
+              <Stack gap={2}>
+                <SectionLabel>Rules applied</SectionLabel>
+                <Stack gap={1}>
+                  {detail.rules_applied.map((rule) => (
+                    <span key={rule} style={{ fontSize: "12px", color: t.textMuted, lineHeight: 1.5 }}>
+                      {rule}
+                    </span>
+                  ))}
+                </Stack>
+              </Stack>
+            ) : null}
 
-            <Box display="flex" flexDirection="column" gap="spacing.2">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <Text weight="semibold" size="small">
-                  {detail.source_record_ids.length.toLocaleString("en-IN")} source records
-                </Text>
-                {detail.source_record_ids.length > 20 && (
+            <Stack gap={2.5}>
+              <Row gap={3} style={{ justifyContent: "space-between" }}>
+                <SectionLabel>
+                  {records.length.toLocaleString("en-IN")} source records
+                </SectionLabel>
+                {records.length > 20 ? (
                   <input
-                    type="text"
-                    placeholder="Filter TXN ID..."
+                    type="search"
+                    placeholder="Filter…"
                     value={search}
-                    onChange={(e) => setSearch(e.target.value)}
+                    onChange={(event) => setSearch(event.target.value)}
                     style={{
-                      padding: "4px 8px",
-                      borderRadius: "6px",
-                      border: `1px solid ${isDark ? "#1E293B" : "#E2E8F0"}`,
-                      backgroundColor: isDark ? "#080B11" : "#F8FAFC",
-                      color: isDark ? "#F8FAFC" : "#0F172A",
-                      fontSize: "11px",
+                      padding: `${space(1)} ${space(2)}`,
+                      borderRadius: radius.sm,
+                      border: `1px solid ${t.border}`,
+                      backgroundColor: t.sunken,
+                      color: t.text,
+                      font: "inherit",
+                      fontSize: "11.5px",
+                      outline: "none",
+                      width: "140px",
                     }}
                   />
-                )}
-              </div>
+                ) : null}
+              </Row>
 
-              <Text size="xsmall" color="surface.text.gray.muted">
+              <span style={{ fontSize: "11.5px", color: t.textFaint, lineHeight: 1.5 }}>
                 Every record the whole chain reaches, however deep. This is the answer to
                 &ldquo;show me the transactions behind this percentage&rdquo;.
-              </Text>
+              </span>
 
-              <Box display="flex" flexWrap="wrap" gap="spacing.2" testID="source-records">
-                {(filteredRecords ?? []).slice(0, 60).map((record) => (
+              <div
+                data-testid="source-records"
+                style={{ display: "flex", flexWrap: "wrap", gap: space(1.5) }}
+              >
+                {filtered.slice(0, 60).map((record) => (
                   <Badge key={record} color="neutral" size="small">
                     {record}
                   </Badge>
                 ))}
-                {(filteredRecords ?? []).length > 60 ? (
-                  <Text size="xsmall" color="surface.text.gray.muted">
-                    + {(filteredRecords ?? []).length - 60} more
-                  </Text>
+                {filtered.length > 60 ? (
+                  <span style={{ fontSize: "11.5px", color: t.textFaint, alignSelf: "center" }}>
+                    + {(filtered.length - 60).toLocaleString("en-IN")} more
+                  </span>
                 ) : null}
-              </Box>
-            </Box>
-          </Box>
+                {filtered.length === 0 ? (
+                  <span style={{ fontSize: "11.5px", color: t.textFaint }}>
+                    <Database size={12} style={{ verticalAlign: "-2px" }} /> nothing matches
+                    &ldquo;{search}&rdquo;
+                  </span>
+                ) : null}
+              </div>
+            </Stack>
+          </Stack>
         )}
       </DrawerBody>
     </Drawer>
@@ -140,46 +210,62 @@ export function ProvenanceDrawer({
 
 /** One node, then its operands, then theirs. The whole recursive renderer. */
 export function Level({ node, depth }: { node: ProvenanceLevel; depth: number }) {
+  const { t } = useTheme();
+  const derived = node.support === "FORMULA";
   return (
-    <Box
-      display="flex"
-      flexDirection="column"
-      gap="spacing.2"
-      paddingLeft={depth === 0 ? "spacing.0" : "spacing.5"}
-      testID="provenance-node"
+    <div
+      data-testid="provenance-node"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: space(1.5),
+        paddingLeft: depth === 0 ? 0 : space(4),
+        borderLeft: depth === 0 ? "none" : `1px solid ${t.border}`,
+        marginLeft: depth === 0 ? 0 : space(1),
+      }}
     >
-      <Box display="flex" alignItems="center" gap="spacing.3" flexWrap="wrap">
-        <Text weight="semibold">{node.display}</Text>
-        <Text size="small" color="surface.text.gray.muted">
+      <Row gap={2.5}>
+        <span style={{ ...numeric, fontSize: "15px", fontWeight: 650, color: t.text }}>
+          {node.display}
+        </span>
+        <span style={{ fontSize: "12px", color: t.textMuted }}>
           {node.metric_id}
           {node.dimension_value ? ` · ${node.dimension_value}` : ""}
-        </Text>
-        <Badge color={node.support === "FORMULA" ? "information" : "neutral"} size="small">
-          {node.support === "FORMULA" ? "derived" : "fold"}
-        </Badge>
-      </Box>
+        </span>
+        <Pill tone={derived ? "info" : "neutral"}>{derived ? "derived" : "fold"}</Pill>
+      </Row>
 
-      <Text size="xsmall" color="surface.text.gray.muted">
-        {node.detail}
-      </Text>
-      <Text size="xsmall" color="surface.text.gray.muted">
+      <span style={{ fontSize: "11.5px", color: t.textMuted, lineHeight: 1.5 }}>{node.detail}</span>
+      <span style={{ fontSize: "11px", color: t.textFaint }}>
         {node.tool_name} · [{node.period_from}, {node.period_to})
-      </Text>
+      </span>
 
-      {node.operands.map((operand) => (
-        <Box key={`${operand.name}:${operand.reference}`} display="flex" flexDirection="column">
-          <Text size="xsmall" color="surface.text.gray.muted">
-            {operand.name} = {operand.display}
-          </Text>
-          {operand.node ? <Level node={operand.node} depth={depth + 1} /> : null}
-        </Box>
-      ))}
+      {node.operands.length > 0 ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: space(2), marginTop: space(1) }}>
+          {node.operands.map((operand) => (
+            <div
+              key={`${operand.name}:${operand.reference}`}
+              style={{ display: "flex", flexDirection: "column", gap: space(1.5) }}
+            >
+              <span style={{ ...numeric, fontSize: "12px", color: t.textMuted }}>
+                {operand.name} = {operand.display}
+              </span>
+              {operand.node ? <Level node={operand.node} depth={depth + 1} /> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {node.support === "AGGREGATION" && node.source_record_ids.length > 0 ? (
-        <Text size="xsmall" color="surface.text.gray.muted">
+        <span style={{ fontSize: "11px", color: t.textFaint }}>
           folds {node.source_record_ids.length.toLocaleString("en-IN")} records
-        </Text>
+        </span>
       ) : null}
-    </Box>
+    </div>
   );
+}
+
+/** Kept exported for pages that want an inline evidence id chip. */
+export function EvidenceId({ id }: { id: string }) {
+  return <Mono muted>{id}</Mono>;
 }

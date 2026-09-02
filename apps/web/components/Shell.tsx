@@ -1,33 +1,43 @@
 "use client";
 
-import { Badge, Box, Button, Heading, Text } from "@razorpay/blade/components";
-import {
-  Activity,
-  AlertCircle,
-  Database,
-  History,
-  LayoutDashboard,
-  MessageSquare,
-  Moon,
-  Scale,
-  ShieldCheck,
-  Sun,
-} from "lucide-react";
+/**
+ * The frame every page sits in: brand, navigation, page heading, footer.
+ *
+ * The merchant chip and the footer say what this build actually is -- synthetic
+ * data, calibrated against published aggregates. A finance console that
+ * describes a seeded fixture as a "live merchant" has told its first lie before
+ * the reader has read a number.
+ */
+
+import { Moon, Sun } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
-import { useAppTheme } from "@/app/providers";
+import { useTheme } from "@/app/providers";
 import { RazorMindLogo } from "@/components/RazorMindLogo";
+import { Pill } from "@/components/ui";
+import { MERCHANT_ID } from "@/lib/api";
+import { radius, space, transition } from "@/lib/theme";
+import {
+  Activity,
+  Database,
+  History,
+  LayoutDashboard,
+  MessageSquare,
+  Scale,
+} from "lucide-react";
 
 const NAV_ITEMS = [
-  { href: "/", label: "AI Studio", icon: MessageSquare },
+  { href: "/", label: "Ask", icon: MessageSquare },
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/reconciliation", label: "Reconciliation", icon: Scale },
-  { href: "/provenance", label: "Data Calibration", icon: Database },
-  { href: "/history", label: "Audit History", icon: History },
-  { href: "/sandbox", label: "Chaos Sandbox", icon: Activity },
+  { href: "/provenance", label: "Calibration", icon: Database },
+  { href: "/history", label: "History", icon: History },
+  { href: "/sandbox", label: "Sandbox", icon: Activity },
 ] as const;
+
+const MAX_WIDTH = "1280px";
 
 export function Shell({
   title,
@@ -41,84 +51,44 @@ export function Shell({
   action?: ReactNode;
 }) {
   const pathname = usePathname();
-  const { isDark, toggleTheme } = useAppTheme();
+  const { t, isDark, toggle } = useTheme();
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        minHeight: "100vh",
-      }}
-    >
-      {/* Top Navbar */}
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
       <header
         style={{
-          borderBottom: `1px solid ${isDark ? "rgba(255, 255, 255, 0.08)" : "rgba(0, 0, 0, 0.08)"}`,
-          backgroundColor: isDark ? "rgba(10, 14, 23, 0.85)" : "rgba(255, 255, 255, 0.85)",
-          backdropFilter: "blur(12px)",
           position: "sticky",
           top: 0,
           zIndex: 100,
-          padding: "12px 24px",
+          borderBottom: `1px solid ${t.border}`,
+          backgroundColor: t.canvasTranslucent,
+          backdropFilter: "blur(14px) saturate(160%)",
+          WebkitBackdropFilter: "blur(14px) saturate(160%)",
         }}
       >
         <div
           style={{
-            maxWidth: "1280px",
+            maxWidth: MAX_WIDTH,
             margin: "0 auto",
+            padding: `${space(2.5)} ${space(5)}`,
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
+            gap: space(4),
             flexWrap: "wrap",
-            gap: "16px",
           }}
         >
-          {/* Brand & Context */}
-          <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
-            <Link href="/" style={{ textDecoration: "none", color: "inherit" }}>
-              <RazorMindLogo size="medium" />
+          <div style={{ display: "flex", alignItems: "center", gap: space(3) }}>
+            <Link href="/" style={{ textDecoration: "none", color: "inherit", display: "flex" }}>
+              <RazorMindLogo size="medium" showTag={false} />
             </Link>
-
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                padding: "4px 10px",
-                borderRadius: "20px",
-                backgroundColor: isDark ? "rgba(255, 255, 255, 0.05)" : "rgba(0, 0, 0, 0.04)",
-                border: `1px solid ${isDark ? "rgba(255, 255, 255, 0.1)" : "rgba(0, 0, 0, 0.08)"}`,
-                fontSize: "12px",
-                fontFamily: "Inter, sans-serif",
-              }}
-            >
-              <span style={{ fontWeight: 600, color: "#0C83FF" }}>M123</span>
-              <span style={{ opacity: 0.5 }}>·</span>
-              <span style={{ color: isDark ? "#94A3B8" : "#64748B" }}>Razorpay Live Merchant</span>
-            </div>
-
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                fontSize: "11px",
-                fontWeight: 600,
-                color: "#10B981",
-                backgroundColor: "rgba(16, 185, 129, 0.1)",
-                padding: "3px 8px",
-                borderRadius: "12px",
-                border: "1px solid rgba(16, 185, 129, 0.25)",
-              }}
-            >
-              <ShieldCheck size={13} />
-              <span>5-LAYER VERIFIED</span>
-            </div>
+            <Pill tone="neutral" title={`Merchant ${MERCHANT_ID}`}>
+              <span style={{ color: t.accent }}>Demo merchant</span>
+              <span style={{ color: t.textFaint, fontWeight: 500 }}>· synthetic data</span>
+            </Pill>
           </div>
 
-          {/* Nav items */}
-          <nav style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+          <nav style={{ display: "flex", alignItems: "center", gap: space(0.5) }}>
             {NAV_ITEMS.map((item) => {
               const active = pathname === item.href;
               const Icon = item.icon;
@@ -126,136 +96,139 @@ export function Shell({
                 <Link
                   key={item.href}
                   href={item.href}
+                  aria-current={active ? "page" : undefined}
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: "6px",
-                    padding: "6px 12px",
-                    borderRadius: "8px",
+                    gap: space(1.5),
+                    padding: `${space(1.5)} ${space(3)}`,
+                    borderRadius: radius.md,
                     fontSize: "13px",
                     fontWeight: active ? 600 : 500,
                     textDecoration: "none",
-                    color: active
-                      ? "#0C83FF"
-                      : isDark
-                        ? "#94A3B8"
-                        : "#475569",
-                    backgroundColor: active
-                      ? isDark
-                        ? "rgba(12, 131, 255, 0.12)"
-                        : "rgba(12, 131, 255, 0.08)"
-                      : "transparent",
-                    transition: "all 0.15s ease",
+                    color: active ? t.accent : t.textMuted,
+                    backgroundColor: active ? t.accentSoft : "transparent",
+                    transition: `color ${transition.fast}, background-color ${transition.fast}`,
                   }}
                 >
-                  <Icon size={15} />
+                  <Icon size={15} strokeWidth={active ? 2.4 : 2} />
                   <span>{item.label}</span>
                 </Link>
               );
             })}
 
-            {/* Theme Toggle Button */}
             <button
-              onClick={toggleTheme}
-              title={`Switch to ${isDark ? "Light" : "Dark"} Mode`}
+              type="button"
+              onClick={toggle}
+              aria-label={`Switch to ${isDark ? "light" : "dark"} mode`}
+              title={`Switch to ${isDark ? "light" : "dark"} mode`}
               style={{
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                width: "36px",
-                height: "36px",
-                borderRadius: "8px",
-                border: `1px solid ${isDark ? "rgba(255, 255, 255, 0.12)" : "rgba(0, 0, 0, 0.12)"}`,
-                backgroundColor: isDark ? "rgba(255, 255, 255, 0.04)" : "rgba(0, 0, 0, 0.03)",
-                color: isDark ? "#F1F5F9" : "#1E293B",
+                width: "34px",
+                height: "34px",
+                marginLeft: space(2),
+                borderRadius: radius.md,
+                border: `1px solid ${t.border}`,
+                backgroundColor: "transparent",
+                color: t.textMuted,
                 cursor: "pointer",
-                marginLeft: "8px",
-                transition: "all 0.2s ease",
+                transition: `color ${transition.fast}, border-color ${transition.fast}`,
               }}
             >
-              {isDark ? <Sun size={17} color="#F59E0B" /> : <Moon size={17} color="#0C83FF" />}
+              {isDark ? <Sun size={16} /> : <Moon size={16} />}
             </button>
           </nav>
         </div>
       </header>
 
-      {/* Main Page Container */}
       <main
         style={{
-          maxWidth: "1280px",
+          maxWidth: MAX_WIDTH,
           width: "100%",
           margin: "0 auto",
-          padding: "24px 20px 60px 20px",
+          padding: `${space(8)} ${space(5)} ${space(16)}`,
           display: "flex",
           flexDirection: "column",
-          gap: "24px",
+          gap: space(6),
           flex: 1,
         }}
       >
-        {/* Page Header */}
         <div
           style={{
             display: "flex",
             justifyContent: "space-between",
-            alignItems: "flex-start",
+            alignItems: "flex-end",
             flexWrap: "wrap",
-            gap: "16px",
+            gap: space(4),
           }}
         >
-          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: space(1.5) }}>
             <h1
               style={{
                 margin: 0,
-                fontSize: "24px",
-                fontWeight: 700,
-                letterSpacing: "-0.02em",
-                color: isDark ? "#F8FAFC" : "#0F172A",
+                fontSize: "26px",
+                fontWeight: 680,
+                letterSpacing: "-0.025em",
+                color: t.text,
+                lineHeight: 1.15,
               }}
             >
               {title}
             </h1>
-            {subtitle && (
+            {subtitle ? (
               <p
                 style={{
                   margin: 0,
                   fontSize: "14px",
-                  color: isDark ? "#94A3B8" : "#64748B",
-                  maxWidth: "780px",
-                  lineHeight: 1.5,
+                  lineHeight: 1.55,
+                  color: t.textMuted,
+                  maxWidth: "72ch",
                 }}
               >
                 {subtitle}
               </p>
-            )}
+            ) : null}
           </div>
-          {action && <div>{action}</div>}
+          {action}
         </div>
 
         {children}
       </main>
 
-      {/* Footer */}
       <footer
         style={{
-          borderTop: `1px solid ${isDark ? "rgba(255, 255, 255, 0.06)" : "rgba(0, 0, 0, 0.06)"}`,
-          padding: "16px 24px",
-          textAlign: "center",
-          fontSize: "12px",
-          color: isDark ? "#64748B" : "#94A3B8",
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          gap: "16px",
-          flexWrap: "wrap",
+          borderTop: `1px solid ${t.border}`,
+          padding: `${space(5)} ${space(5)}`,
         }}
       >
-        <span>
-          RazorMind <strong>v1.0</strong> · Deterministic Financial Intelligence
-        </span>
-        <span>·</span>
-        <span>NPCI/RBI Calibrated Synthetic Seed</span>
-        <span>·</span>
-        <span style={{ color: "#10B981" }}>No LLM Touches Arithmetic (Enforced by Import Linter)</span>
+        <div
+          style={{
+            maxWidth: MAX_WIDTH,
+            margin: "0 auto",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: space(3),
+            flexWrap: "wrap",
+            fontSize: "12px",
+            color: t.textFaint,
+          }}
+        >
+          <span>RazorMind · synthetic data calibrated against published aggregates</span>
+          <span style={{ display: "flex", alignItems: "center", gap: space(1.5) }}>
+            <span
+              style={{
+                width: "6px",
+                height: "6px",
+                borderRadius: radius.pill,
+                backgroundColor: t.positive,
+              }}
+            />
+            No model computes a number — enforced at build time by import-linter
+          </span>
+        </div>
       </footer>
     </div>
   );

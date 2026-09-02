@@ -5,9 +5,13 @@ import React from "react";
 export function RazorMindLogo({
   size = "medium",
   showText = true,
+  showTag = true,
 }: {
   size?: "small" | "medium" | "large";
   showText?: boolean;
+  /** The "Deterministic" chip. Off in the header, where the merchant pill
+      already occupies that slot and two chips read as noise. */
+  showTag?: boolean;
 }) {
   const dims =
     size === "small"
@@ -70,6 +74,7 @@ export function RazorMindLogo({
             >
               Razor<span style={{ color: "#0C83FF" }}>Mind</span>
             </span>
+            {showTag ? (
             <span
               style={{
                 fontSize: "10px",
@@ -85,6 +90,7 @@ export function RazorMindLogo({
             >
               Deterministic
             </span>
+            ) : null}
           </div>
         </div>
       )}

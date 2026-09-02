@@ -1,312 +1,225 @@
 "use client";
 
-import { Badge, Box, Button, Card, CardBody, Heading, Text } from "@razorpay/blade/components";
-import { CheckCircle2, Database, ExternalLink, FileText, Info, Lock, ShieldCheck } from "lucide-react";
+/**
+ * Where the data itself comes from, and which parameters are cited rather than
+ * assumed.
+ *
+ * Everything here is read from `/api/v1/provenance`. The fee schedule was a
+ * hardcoded table in this file with prettier labels than the API's own — two
+ * descriptions of one rate, on the page whose entire subject is that a
+ * parameter must carry a provenance tag. When they drifted, the prettier one
+ * would have won, silently.
+ */
+
+import { Alert, Spinner } from "@razorpay/blade/components";
+import type { DataProvenance, FeeRuleView } from "@shared/api";
+import { Info } from "lucide-react";
 import React, { useEffect, useState } from "react";
 
-import { useAppTheme } from "@/app/providers";
+import { useTheme } from "@/app/providers";
 import { Shell } from "@/components/Shell";
+import { Grid, MetricTile, Mono, Panel, PanelHeader, Pill, Row, SectionLabel, Stack } from "@/components/ui";
 import { API_BASE, USER_ID } from "@/lib/api";
-import type { DataProvenance } from "@shared/api";
+import { numeric, radius, space, type Tone } from "@/lib/theme";
 
-const FEE_SCHEDULE = [
-  {
-    instrument: "UPI (Bank Account)",
-    mdr: "0.00% (Zero MDR)",
-    flat: "₹0.00",
-    provenance: "CITED",
-    source: "NPCI / Govt Mandate (Jan 2020)",
-    note: "Mandatory zero merchant discount rate on P2M bank transfers",
-  },
-  {
-    instrument: "RuPay Debit Card",
-    mdr: "0.00% (Zero MDR)",
-    flat: "₹0.00",
-    provenance: "CITED",
-    source: "RBI Notification (2019)",
-    note: "Statutory zero-MDR on domestic RuPay debit",
-  },
-  {
-    instrument: "UPI (PPI / Wallet > ₹2k)",
-    mdr: "1.10%",
-    flat: "₹0.00",
-    provenance: "CITED",
-    source: "NPCI Circular (2023)",
-    note: "Interchange applicable only on wallet-funded P2M above ₹2,000",
-  },
-  {
-    instrument: "Mastercard / Visa Card",
-    mdr: "1.90%",
-    flat: "₹3.00",
-    provenance: "ASSUMED",
-    source: "Commercial Agreement",
-    note: "Standard negotiated merchant discount rate",
-  },
-  {
-    instrument: "Netbanking (T1 Banks)",
-    mdr: "0.00%",
-    flat: "₹15.00",
-    provenance: "ASSUMED",
-    source: "Corporate Banking Agreement",
-    note: "Flat billing per corporate netbanking settlement",
-  },
-];
+const TAG_TONE: Record<string, Tone> = {
+  CITED: "positive",
+  DERIVED: "info",
+  ASSUMED: "warning",
+};
+
+/** `UPI_PPI_WALLET` -> `UPI PPI wallet`. The API's name, made readable — not renamed. */
+function instrumentLabel(id: string): string {
+  const [head, ...rest] = id.split("_");
+  return [head, ...rest.map((word) => word.toLowerCase())].join(" ");
+}
 
 export default function ProvenancePage() {
-  const { isDark } = useAppTheme();
+  const { t } = useTheme();
   const [data, setData] = useState<DataProvenance | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/provenance`, {
-      headers: { "X-RazorMind-User": USER_ID },
-    })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => setData(json))
-      .catch(() => undefined);
+    let live = true;
+    fetch(`${API_BASE}/api/v1/provenance`, { headers: { "X-RazorMind-User": USER_ID } })
+      .then((response) => {
+        if (!response.ok) throw new Error(`${response.status} from /provenance`);
+        return response.json() as Promise<DataProvenance>;
+      })
+      .then((json) => live && setData(json))
+      .catch((failure: Error) => live && setError(failure.message));
+    return () => {
+      live = false;
+    };
   }, []);
+
+  if (error) {
+    return (
+      <Shell title="Calibration">
+        <Alert isFullWidth color="negative" title="Cannot load provenance" description={error} />
+      </Shell>
+    );
+  }
+  if (!data) {
+    return (
+      <Shell title="Calibration">
+        <Spinner accessibilityLabel="Loading provenance" size="medium" />
+      </Shell>
+    );
+  }
+
+  const counts = Object.entries(data.parameter_counts).filter(([, n]) => (n ?? 0) > 0);
 
   return (
     <Shell
-      title="Data Provenance & Regulatory Calibration"
-      subtitle="Every parameter in RazorMind carries a provenance tag (CITED or ASSUMED). The dataset is synthetic, but calibrated strictly against published NPCI & RBI statistics."
+      title="Calibration"
+      subtitle="Every parameter carries a provenance tag. The records are synthetic; the aggregates they are calibrated against are not."
     >
-      {/* Banner */}
       <div
         style={{
-          padding: "16px 20px",
-          borderRadius: "12px",
-          backgroundColor: isDark ? "rgba(12, 131, 255, 0.08)" : "rgba(12, 131, 255, 0.05)",
-          border: `1px solid ${isDark ? "rgba(12, 131, 255, 0.25)" : "rgba(12, 131, 255, 0.18)"}`,
           display: "flex",
           alignItems: "flex-start",
-          gap: "14px",
+          gap: space(3.5),
+          padding: `${space(4)} ${space(5)}`,
+          borderRadius: radius.lg,
+          backgroundColor: t.accentSoft,
+          border: `1px solid ${t.accentBorder}`,
         }}
       >
-        <Info size={20} color="#0C83FF" style={{ flexShrink: 0, marginTop: "2px" }} />
-        <div style={{ fontSize: "13px", lineHeight: 1.5, color: isDark ? "#CBD5E1" : "#334155" }}>
-          <strong>Synthetic & Calibrated Dataset (Scenario revenue_decline_v1, Seed 42).</strong> No real
-          customer or bank record is represented. What matters is that a design choice is never mistaken for an
-          observation: Counts are designed; money is derived.
-        </div>
+        <Info size={18} color={t.accent} style={{ flexShrink: 0, marginTop: "2px" }} />
+        <span style={{ fontSize: "13px", lineHeight: 1.6, color: t.text }}>
+          {data.disclaimer}
+        </span>
       </div>
 
-      {/* Parameter Taxonomy Scorecards */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-          gap: "16px",
-        }}
-      >
-        <div
-          style={{
-            padding: "20px",
-            borderRadius: "12px",
-            backgroundColor: isDark ? "#0E131F" : "#FFFFFF",
-            border: `1px solid ${isDark ? "#1E293B" : "#E2E8F0"}`,
-            display: "flex",
-            flexDirection: "column",
-            gap: "8px",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: "12px", fontWeight: 600, color: isDark ? "#94A3B8" : "#64748B" }}>
-              CITED Parameters
-            </span>
-            <span
-              style={{
-                fontSize: "11px",
-                fontWeight: 600,
-                padding: "2px 8px",
-                borderRadius: "4px",
-                backgroundColor: "rgba(16,185,129,0.12)",
-                color: "#10B981",
-              }}
-            >
-              10 Parameters
-            </span>
-          </div>
-          <div style={{ fontSize: "20px", fontWeight: 700 }}>NPCI & RBI Published</div>
-          <div style={{ fontSize: "12px", color: isDark ? "#64748B" : "#94A3B8" }}>
-            UPI ticket sizes, rail volumes, zero-MDR mandates, and issuer failure distributions.
-          </div>
-        </div>
+      <Grid min="200px">
+        <MetricTile label="Scenario" value={data.scenario_id} caption="the seeded storyline" />
+        <MetricTile label="Seed" value={data.seed} caption="regeneration is byte-identical" />
+        {counts.map(([tag, n]) => (
+          <MetricTile
+            key={tag}
+            label={`${tag.charAt(0)}${tag.slice(1).toLowerCase()} parameters`}
+            value={n ?? 0}
+            tone={TAG_TONE[tag]}
+            caption={
+              tag === "CITED"
+                ? "traceable to a published source"
+                : tag === "ASSUMED"
+                  ? "a design choice, stated as one"
+                  : "computed from the others"
+            }
+          />
+        ))}
+      </Grid>
 
-        <div
-          style={{
-            padding: "20px",
-            borderRadius: "12px",
-            backgroundColor: isDark ? "#0E131F" : "#FFFFFF",
-            border: `1px solid ${isDark ? "#1E293B" : "#E2E8F0"}`,
-            display: "flex",
-            flexDirection: "column",
-            gap: "8px",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: "12px", fontWeight: 600, color: isDark ? "#94A3B8" : "#64748B" }}>
-              ASSUMED Parameters
-            </span>
-            <span
-              style={{
-                fontSize: "11px",
-                fontWeight: 600,
-                padding: "2px 8px",
-                borderRadius: "4px",
-                backgroundColor: "rgba(100,116,139,0.15)",
-                color: "#94A3B8",
-              }}
-            >
-              12 Parameters
-            </span>
-          </div>
-          <div style={{ fontSize: "20px", fontWeight: 700 }}>Merchant Business Mix</div>
-          <div style={{ fontSize: "12px", color: isDark ? "#64748B" : "#94A3B8" }}>
-            Single-merchant payment mix preferences, card brand split, and customer refund request timing.
-          </div>
-        </div>
-
-        <div
-          style={{
-            padding: "20px",
-            borderRadius: "12px",
-            backgroundColor: isDark ? "#0E131F" : "#FFFFFF",
-            border: `1px solid ${isDark ? "#1E293B" : "#E2E8F0"}`,
-            display: "flex",
-            flexDirection: "column",
-            gap: "8px",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: "12px", fontWeight: 600, color: isDark ? "#94A3B8" : "#64748B" }}>
-              Ground Truth Checksums
-            </span>
-            <span
-              style={{
-                fontSize: "11px",
-                fontWeight: 600,
-                padding: "2px 8px",
-                borderRadius: "4px",
-                backgroundColor: "rgba(12,131,255,0.12)",
-                color: "#0C83FF",
-              }}
-            >
-              SHA-256 Verified
-            </span>
-          </div>
-          <div style={{ fontSize: "20px", fontWeight: 700 }}>4 Seed Artifacts</div>
-          <div style={{ fontSize: "12px", color: isDark ? "#64748B" : "#94A3B8" }}>
-            Seed 42 golden fixtures verified before investigation runs.
-          </div>
-        </div>
-      </div>
-
-      {/* Master Fee Schedule Matrix */}
-      <div
-        style={{
-          padding: "24px",
-          borderRadius: "12px",
-          backgroundColor: isDark ? "#0E131F" : "#FFFFFF",
-          border: `1px solid ${isDark ? "#1E293B" : "#E2E8F0"}`,
-          display: "flex",
-          flexDirection: "column",
-          gap: "16px",
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <h2 style={{ margin: 0, fontSize: "18px", fontWeight: 700 }}>
-              Instrument-Wise Master Fee Schedule
-            </h2>
-            <p style={{ margin: "4px 0 0 0", fontSize: "13px", color: isDark ? "#94A3B8" : "#64748B" }}>
-              Fees follow the instrument, not a flat 1%. Blended effective rate is 0.006420 (0.642%).
-            </p>
-          </div>
-          <span
-            style={{
-              fontSize: "11px",
-              fontWeight: 600,
-              padding: "4px 10px",
-              borderRadius: "6px",
-              backgroundColor: "rgba(16,185,129,0.12)",
-              color: "#10B981",
-              border: "1px solid rgba(16,185,129,0.25)",
-            }}
-          >
-            MANDATE COMPLIANT
-          </span>
-        </div>
-
+      <Panel>
+        <PanelHeader
+          title="Fee schedule"
+          hint="Served by the API, not restated here. A rate tagged ASSUMED is a commercial choice; CITED means it traces to a regulator's own notification."
+        />
         <div style={{ overflowX: "auto" }}>
           <table
             style={{
               width: "100%",
               borderCollapse: "collapse",
-              textAlign: "left",
-              fontSize: "13px",
+              fontSize: "12.5px",
+              minWidth: "640px",
             }}
           >
             <thead>
-              <tr
-                style={{
-                  borderBottom: `1px solid ${isDark ? "#1E293B" : "#E2E8F0"}`,
-                  color: isDark ? "#94A3B8" : "#64748B",
-                  fontSize: "11px",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.05em",
-                }}
-              >
-                <th style={{ padding: "12px 16px" }}>Instrument / Payment Rail</th>
-                <th style={{ padding: "12px 16px" }}>MDR Rate</th>
-                <th style={{ padding: "12px 16px" }}>Platform Fee</th>
-                <th style={{ padding: "12px 16px" }}>Provenance</th>
-                <th style={{ padding: "12px 16px" }}>Legal & Regulatory Basis</th>
+              <tr>
+                {["Instrument", "MDR", "Flat fee", "Applies above", "Source", ""].map((head) => (
+                  <th
+                    key={head}
+                    style={{
+                      textAlign: head === "Instrument" || head === "" ? "left" : "right",
+                      padding: `${space(2)} ${space(3)}`,
+                      borderBottom: `1px solid ${t.border}`,
+                      color: t.textFaint,
+                      fontWeight: 700,
+                      fontSize: "10.5px",
+                      letterSpacing: "0.08em",
+                      textTransform: "uppercase",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {head}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {FEE_SCHEDULE.map((row, idx) => (
-                <tr
-                  key={idx}
-                  style={{
-                    borderBottom: `1px solid ${isDark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)"}`,
-                  }}
-                >
-                  <td style={{ padding: "14px 16px", fontWeight: 600 }}>{row.instrument}</td>
-                  <td style={{ padding: "14px 16px", fontFamily: "JetBrains Mono, monospace" }}>
-                    {row.mdr}
-                  </td>
-                  <td style={{ padding: "14px 16px", fontFamily: "JetBrains Mono, monospace" }}>
-                    {row.flat}
-                  </td>
-                  <td style={{ padding: "14px 16px" }}>
-                    <span
-                      style={{
-                        fontSize: "11px",
-                        fontWeight: 600,
-                        padding: "2px 6px",
-                        borderRadius: "4px",
-                        backgroundColor:
-                          row.provenance === "CITED"
-                            ? "rgba(16,185,129,0.12)"
-                            : "rgba(100,116,139,0.15)",
-                        color: row.provenance === "CITED" ? "#10B981" : "#94A3B8",
-                      }}
-                    >
-                      {row.provenance}
-                    </span>
-                  </td>
-                  <td style={{ padding: "14px 16px", color: isDark ? "#94A3B8" : "#64748B" }}>
-                    <div>{row.note}</div>
-                    <div style={{ fontSize: "11px", opacity: 0.8, marginTop: "2px" }}>
-                      Source: {row.source}
-                    </div>
-                  </td>
-                </tr>
+              {data.fee_schedule.map((rule) => (
+                <FeeRow key={rule.instrument} rule={rule} />
               ))}
             </tbody>
           </table>
         </div>
-      </div>
+      </Panel>
+
+      <Panel>
+        <PanelHeader
+          title="Checksums"
+          hint="The generator is deterministic. These are what a regeneration has to reproduce."
+        />
+        <Stack gap={2}>
+          {Object.entries(data.checksums).map(([name, sum]) => (
+            <Row key={name} gap={3} style={{ justifyContent: "space-between" }}>
+              <span style={{ fontSize: "12.5px", color: t.textMuted }}>{name}</span>
+              <Mono>{sum}</Mono>
+            </Row>
+          ))}
+        </Stack>
+        <div style={{ marginTop: space(4), paddingTop: space(4), borderTop: `1px solid ${t.border}` }}>
+          <Stack gap={2}>
+            <SectionLabel>Calibrated against</SectionLabel>
+            <span style={{ fontSize: "12.5px", color: t.textMuted, lineHeight: 1.6 }}>
+              {data.aggregate_calibration}
+            </span>
+            <Row gap={2}>
+              <Mono muted>{data.sources_document}</Mono>
+              <Mono muted>{data.transaction_records}</Mono>
+              <Mono muted>{data.ground_truth}</Mono>
+            </Row>
+          </Stack>
+        </div>
+      </Panel>
     </Shell>
+  );
+}
+
+function FeeRow({ rule }: { rule: FeeRuleView }) {
+  const { t } = useTheme();
+  const cell = {
+    padding: `${space(2.5)} ${space(3)}`,
+    borderBottom: `1px solid ${t.border}`,
+    color: t.text,
+  } as const;
+  const rate = Number(rule.mdr_rate);
+  return (
+    <tr>
+      <td style={{ ...cell, fontWeight: 550 }}>{instrumentLabel(rule.instrument)}</td>
+      {/* Every figure below is the string the API rendered. Nothing here
+          divides paise by 100 -- see D-54, and `mdr_display` on the route. */}
+      <td style={{ ...cell, ...numeric, textAlign: "right" }}>
+        {rate === 0 ? (
+          <span style={{ color: t.positive, fontWeight: 600 }}>zero</span>
+        ) : (
+          rule.mdr_display
+        )}
+      </td>
+      <td style={{ ...cell, ...numeric, textAlign: "right", color: t.textMuted }}>
+        {rule.flat_fee_paise === 0 ? "—" : rule.flat_fee_display}
+      </td>
+      <td style={{ ...cell, ...numeric, textAlign: "right", color: t.textMuted }}>
+        {rule.threshold_paise === 0 ? "—" : rule.threshold_display}
+      </td>
+      <td style={{ ...cell, textAlign: "right" }}>
+        <Pill tone={TAG_TONE[rule.provenance] ?? "neutral"}>{rule.provenance}</Pill>
+      </td>
+      <td style={{ ...cell, color: t.textFaint, fontSize: "11.5px", maxWidth: "34ch", lineHeight: 1.5 }}>
+        {rule.note}
+      </td>
+    </tr>
   );
 }

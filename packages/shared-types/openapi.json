@@ -321,7 +321,12 @@
         "type": "object"
       },
       "ExceptionItem": {
+        "description": "One unmatched row. ``amount_display`` is the rendered figure.\n\nAn exception is not a metric and carries no evidence id, but it is still\nmoney on a screen, and the web app formats none of it (D-54). Without this\nthe exception explorer was the one page dividing paise by 100 in\nTypeScript.",
         "properties": {
+          "amount_display": {
+            "title": "Amount Display",
+            "type": "string"
+          },
           "amount_paise": {
             "title": "Amount Paise",
             "type": "integer"
@@ -382,6 +387,7 @@
           "transaction_id",
           "settlement_id",
           "amount_paise",
+          "amount_display",
           "status",
           "detail"
         ],
@@ -611,13 +617,22 @@
         "type": "object"
       },
       "FeeRuleView": {
+        "description": "One row of the fee schedule, with its money already rendered.\n\n``*_display`` exists for the same reason every metric carries one: the web\napp formats no money, so a rate table it can only render by dividing paise\nby 100 is a second money formatter smuggled in through a page nobody\nthought of as a money page (D-54).",
         "properties": {
+          "flat_fee_display": {
+            "title": "Flat Fee Display",
+            "type": "string"
+          },
           "flat_fee_paise": {
             "title": "Flat Fee Paise",
             "type": "integer"
           },
           "instrument": {
             "title": "Instrument",
+            "type": "string"
+          },
+          "mdr_display": {
+            "title": "Mdr Display",
             "type": "string"
           },
           "mdr_rate": {
@@ -636,6 +651,10 @@
             "title": "Provenance",
             "type": "string"
           },
+          "threshold_display": {
+            "title": "Threshold Display",
+            "type": "string"
+          },
           "threshold_paise": {
             "title": "Threshold Paise",
             "type": "integer"
@@ -644,9 +663,12 @@
         "required": [
           "instrument",
           "mdr_rate",
+          "mdr_display",
           "platform_fee_rate",
           "threshold_paise",
+          "threshold_display",
           "flat_fee_paise",
+          "flat_fee_display",
           "provenance",
           "note"
         ],

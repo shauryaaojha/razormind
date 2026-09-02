@@ -25,6 +25,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from narrative.render import canonical
 from runtime.fees import FEE_SCHEDULE
 
 __all__ = ["router"]
@@ -43,11 +44,22 @@ class ParameterCounts(BaseModel):
 
 
 class FeeRuleView(BaseModel):
+    """One row of the fee schedule, with its money already rendered.
+
+    ``*_display`` exists for the same reason every metric carries one: the web
+    app formats no money, so a rate table it can only render by dividing paise
+    by 100 is a second money formatter smuggled in through a page nobody
+    thought of as a money page (D-54).
+    """
+
     instrument: str
     mdr_rate: str
+    mdr_display: str
     platform_fee_rate: str
     threshold_paise: int
+    threshold_display: str
     flat_fee_paise: int
+    flat_fee_display: str
     provenance: str
     note: str
 
@@ -96,9 +108,12 @@ async def get_provenance() -> DataProvenance:
             FeeRuleView(
                 instrument=rule.instrument.value,
                 mdr_rate=str(rule.mdr_rate),
+                mdr_display=canonical(rule.mdr_rate, "ratio"),
                 platform_fee_rate=str(rule.platform_fee_rate),
                 threshold_paise=rule.threshold_paise,
+                threshold_display=canonical(rule.threshold_paise, "paise"),
                 flat_fee_paise=rule.flat_fee_paise,
+                flat_fee_display=canonical(rule.flat_fee_paise, "paise"),
                 provenance=rule.provenance.value,
                 note=rule.note,
             )

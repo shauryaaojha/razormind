@@ -64,6 +64,7 @@ export interface ExceptionItem {
   transaction_id: string | null;
   settlement_id: string | null;
   amount_paise: number;
+  amount_display: string;
   currency?: string;
   status: string;
   detail: Record<string, unknown>;
@@ -106,9 +107,12 @@ export interface ExecutionSummary {
 export interface FeeRuleView {
   instrument: string;
   mdr_rate: string;
+  mdr_display: string;
   platform_fee_rate: string;
   threshold_paise: number;
+  threshold_display: string;
   flat_fee_paise: number;
+  flat_fee_display: string;
   provenance: string;
   note: string;
 }

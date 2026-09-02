@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from narrative.render import canonical
 from runtime.db import connection
 from runtime.schema import (
     reconciliation_exceptions,
@@ -67,12 +68,21 @@ class RunPage(BaseModel):
 
 
 class ExceptionItem(BaseModel):
+    """One unmatched row. ``amount_display`` is the rendered figure.
+
+    An exception is not a metric and carries no evidence id, but it is still
+    money on a screen, and the web app formats none of it (D-54). Without this
+    the exception explorer was the one page dividing paise by 100 in
+    TypeScript.
+    """
+
     id: str
     category: str
     side: str
     transaction_id: str | None
     settlement_id: str | None
     amount_paise: int
+    amount_display: str
     currency: str = "INR"
     status: str
     detail: dict[str, Any]
@@ -210,6 +220,7 @@ async def list_exceptions(
                 side=row.side,
                 transaction_id=row.transaction_id,
                 settlement_id=row.settlement_id,
+                amount_display=canonical(row.amount_paise, "paise"),
                 amount_paise=row.amount_paise,
                 status=row.status,
                 detail=row.detail_json,

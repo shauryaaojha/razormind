@@ -3,7 +3,7 @@ import "@razorpay/blade/fonts.css";
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
-import { Providers } from "./providers";
+import { Providers, ThemeScript } from "./providers";
 
 export const metadata: Metadata = {
   title: "RazorMind",
@@ -18,7 +18,12 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    // `suppressHydrationWarning` because ThemeScript writes `data-scheme` on
+    // this element before React hydrates, which is the entire point of it.
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <ThemeScript />
+      </head>
       <body style={{ margin: 0 }}>
         <Providers>{children}</Providers>
       </body>
