@@ -23,6 +23,7 @@ root_packages =
     evidence
     provenance
     llm
+    narrative
 
 [importlinter:contract:1]
 name = The deterministic and trust planes cannot reach the LLM
@@ -34,6 +35,7 @@ source_modules =
     verification
     evidence
     provenance
+    narrative
 forbidden_modules =
     llm
     anthropic
@@ -64,6 +66,12 @@ type = layers
 # `plan` is a package for the same reason `evidence` is one: the orchestrator
 # builds and runs a plan, the validator judges one, and neither may import the
 # other -- so the type they both speak sits below both (D-44).
+#
+# `narrative` sits BELOW `llm`, which is the whole reason it is a package. It
+# holds the deterministic template that renders verified metrics when the model
+# is gone or ungrounded, and a fallback that could itself reach a model is not a
+# fallback. It is also listed in contract 1: this is the one thing the system
+# can always still do, and it must stay the one thing that needs nothing (D-50).
 layers =
     routes
     orchestrator
@@ -71,6 +79,7 @@ layers =
     plan
     intent
     llm
+    narrative
     tools
     verification
     provenance

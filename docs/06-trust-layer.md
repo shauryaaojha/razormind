@@ -355,21 +355,71 @@ then parsed back and checked.
 
 ```python
 class Claim(BaseModel):
-    text: str
+    text: str          # the span of the answer that makes the claim
     metric_id: str
     value: int | Decimal
-    unit: str
+    unit: Unit
     evidence_id: str
 ```
 
-Checks, all must pass:
+`text` is a *span*, not an offset pair. The model writes it, and an offset a model computed is one
+more field to distrust; a substring either is in the answer or is not, and looking for it costs
+nothing.
+
+The same type carries the template's answer. That is deliberate: a fallback judged by a weaker
+gate than the thing it replaces is not a fallback but a way around the gate, so `Claim` and
+`Explanation` live in `narrative/`, below both producers
+([D-50](decisions.md#d-50--the-template-renderer-sits-below-the-model-boundary-not-beside-it)).
+
+Checks, all must pass — and unlike the verification layers, **all of them run**. Verification
+stops at the first failure because a later layer reading an earlier layer's numbers produces a
+figure nobody should see; grounding has no such coupling, and its whole output is the list of
+corrections handed back on the second attempt. Naming one problem at a time would make the retry a
+guessing game.
 
 1. Every numeric token in the prose maps to a `Claim`.
 2. Every claim's `metric_id` is in the registered vocabulary.
 3. Every claim's `value` **byte-matches** the verified metric — no rounding, restating, or
-   re-expressing.
+   re-expressing — **and the prose says that value**.
 4. Every claim's `unit` matches the metric's declared unit.
 5. Every `evidence_id` resolves to an `Evidence` row for this execution.
+
+Check 3 is two checks wearing one name, and the second half is the one that earns the phase. A
+model can declare the exact figure in the structured field and write a rounded one in the sentence
+a human reads — which is precisely the defect
+[D-11](decisions.md#d-11--grounding-byte-matches-and-falls-back-to-a-template) is about. So every
+numeric token inside the claim's own span is matched against the accepted renderings of the
+verified value.
+
+### What counts as the same number
+
+`narrative/render.py` holds the one list, used in both directions: the template writes the
+canonical form, and the gate accepts the spellings that lose no digit.
+
+| Unit | Canonical | Also accepted | Refused |
+| --- | --- | --- | --- |
+| `paise` | `₹4,06,260.00` | `₹4,06,260` (the paise are zero), the form without `₹` | `₹406260.00`, `₹4,06,260.5` |
+| `ratio` | `95.8012%` | `0.958012` | `95.80%`, `95.8%` |
+| `pp` | `-1.34` | `1.34` | `-1.34%` — a point is not a percent (C-04) |
+| `count` | `13,420` | `13420` | anything with a decimal point |
+
+Stripping a trailing zero is not rounding: `0.958000` and `0.958` are the same number written two
+ways, and `0.958012` and `0.958` are not. That is why `95.80%` is accepted for `0.958000` and
+refused for `0.958012`.
+
+The unsigned magnitude is accepted for a signed value, because English carries the sign in the
+verb. That is a bounded relaxation and it is stated rather than blurred: grounding is a check on
+the numbers, not on the sentence, and no byte-match can catch "revenue rose by -17.6%" anyway
+([D-48](decisions.md#d-48--grounding-checks-magnitude-and-unit-the-direction-word-goes-unchecked)).
+
+### What is deliberately not claimed
+
+The analysis windows and the merchant id are masked out before tokenising. `2026-08-01` is not a
+claim about money, and a gate that failed on it would be a gate nobody could satisfy. The
+exemption is derived from the evidence rows themselves rather than passed in wholesale, so it
+cannot be widened from outside to whatever the last failing answer happened to contain. Everything
+else with a digit in it must be claimed — including, by design, a number the model was right about
+but did not cite.
 
 Failure path
 ([C-15h](00-corrections.md#c-15-m--other-fixes-applied-without-further-discussion)):
@@ -381,7 +431,18 @@ grounding fails
    -> TEMPLATE_FALLBACK
 ```
 
-The template renders the verified metrics directly with no generated prose. `response_source` is
-persisted so the UI can label it and the eval suite can measure how often it happens.
+The template renders the verified metrics directly with no generated prose: every row, grouped by
+tool and window, each line carrying the evidence id it can be walked down from. `response_source`
+is persisted so the UI can label it and the eval suite can measure how often it happens, and
+`answer_text` is persisted beside it — the two are tied together by a database constraint, so text
+with no declared origin and an origin with no text are both unrepresentable
+([D-49](decisions.md#d-49--the-answer-gets-a-column-and-prose-is-tied-to-its-origin)).
+
+A provider failure skips the retry entirely and goes straight to the template. A missing model does
+not become present on a second call, and the numbers are already verified.
+
+The template is subject to the same five checks. If it ever failed them the run fails rather than
+returning, because there is no floor below a deterministic render of verified rows and unchecked
+prose is not one.
 
 **The user always receives the verified numbers.** The LLM's only privilege is phrasing them.

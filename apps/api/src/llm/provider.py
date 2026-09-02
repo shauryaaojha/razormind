@@ -28,6 +28,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from pydantic import BaseModel
+
 from config.settings import Settings, get_settings
 
 __all__ = [
@@ -38,11 +40,38 @@ __all__ = [
     "ProviderTimeoutError",
     "ProviderUnavailableError",
     "get_provider",
+    "json_schema_for",
 ]
 
 #: The name the forced tool call is given. It appears in the request and in the
 #: response block, and nowhere else.
 STRUCTURED_TOOL = "emit"
+
+
+def json_schema_for(model: type[BaseModel]) -> dict[str, Any]:
+    """The input schema for a forced tool call, generated from a pydantic model.
+
+    Generated rather than written out, so the thing the model is constrained to
+    and the thing its response is validated against cannot drift apart. ``$ref``
+    is resolved inline because a self-contained schema is what a reader of the
+    prompt log can actually check a response against -- a log entry that points
+    at a definition it does not contain is a log entry nobody audits.
+    """
+    schema: dict[str, Any] = model.model_json_schema(by_alias=True)
+    defs = schema.pop("$defs", {})
+
+    def resolve(node: Any) -> Any:
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if isinstance(ref, str) and ref.startswith("#/$defs/"):
+                return resolve(dict(defs[ref.removeprefix("#/$defs/")]))
+            return {key: resolve(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [resolve(item) for item in node]
+        return node
+
+    resolved: dict[str, Any] = resolve(schema)
+    return resolved
 
 
 class ProviderError(Exception):

@@ -36,6 +36,10 @@ EVENT_KINDS: tuple[str, ...] = (
     "node.started",
     "node.finished",
     "verification.finished",
+    # Where the answer came from, how many attempts it took, and why the
+    # template was used if it was. The one event a reader consults to decide
+    # how much of the wording to trust.
+    "explanation.grounded",
     "execution.finished",
 )
 

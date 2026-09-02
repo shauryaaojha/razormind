@@ -424,6 +424,10 @@ agent_executions = Table(
     Column("error_json", _NULLABLE_JSONB, nullable=True),
     Column("response_source", Text, nullable=True),
     Column("grounding_attempts", Integer, nullable=False, server_default=text("0")),
+    # The answer itself. 0001 had nowhere to put it, which would have made
+    # `response_source` a label on text the database never saw (D-49).
+    Column("answer_text", Text, nullable=True),
+    Column("claims_json", _NULLABLE_JSONB, nullable=True),
     Column("seed", BigInteger, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=_NOW),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=_NOW),
@@ -432,6 +436,13 @@ agent_executions = Table(
     CheckConstraint(
         "response_source IS NULL OR response_source IN ('LLM', 'TEMPLATE_FALLBACK')",
         name="ck_executions_response_source_valid",
+    ),
+    # Prose and its origin arrive together or not at all. Text with no declared
+    # source is text nobody can label; a source with no text is a claim that
+    # something was written when nothing was.
+    CheckConstraint(
+        "(answer_text IS NULL) = (response_source IS NULL)",
+        name="ck_executions_answer_has_a_source",
     ),
     CheckConstraint(
         "period_from IS NULL OR period_to IS NULL OR period_from < period_to",

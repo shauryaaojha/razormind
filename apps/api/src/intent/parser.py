@@ -30,6 +30,7 @@ from llm.provider import (
     LLMProvider,
     ProviderError,
     ProviderUnavailableError,
+    json_schema_for,
 )
 
 from .models import INTENT_TYPES, Clarification, Intent
@@ -84,29 +85,7 @@ def intent_schema() -> dict[str, Any]:
     Generated from the model rather than written out, so the prompt and the
     thing it is validated against cannot drift apart.
     """
-    return _inline_defs(Intent.model_json_schema(by_alias=True))
-
-
-def _inline_defs(schema: dict[str, Any]) -> dict[str, Any]:
-    """Resolve ``$ref``s into the schema body.
-
-    Providers accept ``$defs``, but a self-contained schema is what a reader of
-    the prompt log can actually check the response against.
-    """
-    defs = schema.pop("$defs", {})
-
-    def resolve(node: Any) -> Any:
-        if isinstance(node, dict):
-            ref = node.get("$ref")
-            if isinstance(ref, str) and ref.startswith("#/$defs/"):
-                return resolve(dict(defs[ref.removeprefix("#/$defs/")]))
-            return {key: resolve(value) for key, value in node.items()}
-        if isinstance(node, list):
-            return [resolve(item) for item in node]
-        return node
-
-    resolved: dict[str, Any] = resolve(schema)
-    return resolved
+    return json_schema_for(Intent)
 
 
 def system_prompt(merchant_id: str, today: date) -> str:

@@ -96,9 +96,33 @@ Heartbeat comment every 15s so proxies do not close the connection.
 
 ### `GET /executions/{id}`
 
-The record: merchant, period, status, `response_source`, error. Intent, plan, tool executions and
-the final response arrive with the phases that produce them; as of Phase 5 the status is
-`VERIFYING`, `EXPLAINING` or `BLOCKED`, and a blocked one carries the failing layer:
+The record: merchant, period, status, `response_source`, the answer and its claims, error.
+
+A completed execution carries `answer`, `claims` and `grounding_attempts` alongside
+`response_source`. The claims are what makes a number in the prose clickable: the UI does not scan
+the text for figures, it renders the spans the grounding gate already matched to evidence ids.
+
+```json
+{
+  "execution_id": "…",
+  "status": "COMPLETED",
+  "response_source": "TEMPLATE_FALLBACK",
+  "grounding_attempts": 0,
+  "answer": "This answer was assembled from a template rather than…",
+  "claims": [
+    {
+      "text": "- Net revenue (net_revenue_paise): ₹4,02,092.87",
+      "metric_id": "net_revenue_paise",
+      "value": 40209287,
+      "unit": "paise",
+      "evidence_id": "finance.revenue_analysis/1.0/net_revenue_paise/2026-08-01_2026-08-24"
+    }
+  ],
+  "error": null
+}
+```
+
+A blocked one carries the failing layer instead, and no prose at all:
 
 ```json
 {

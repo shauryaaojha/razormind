@@ -5,7 +5,8 @@ PENDING -> PLANNING   parse the question into an intent, or ask one back
         -> VALIDATING eleven gates; nothing has run yet
         -> EXECUTING  the DAG, concurrent within each layer
         -> VERIFYING  the five trust layers over everything published
-        -> EXPLAINING verified; the numbers may now be phrased (Phase 7)
+        -> EXPLAINING verified; the numbers may now be phrased
+        -> COMPLETED  phrased, and every number in the prose matched back
 ```
 
 This module contains no domain logic at all, which is the test of whether the
@@ -26,9 +27,14 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
+from sqlalchemy import func
+
+from evidence.builder import EvidenceSet
 from intent.models import Clarification, Intent
 from intent.parser import IntentParseError, parse_intent
+from llm.explainer import Explained, TemplateGroundingError, explain
 from llm.provider import LLMProvider
+from narrative.models import Explanation
 from plan.models import ExecutionPlan, Role
 from runtime.db import connection
 from tools.catalog import REGISTRY
@@ -59,12 +65,27 @@ class AgentRun:
     rejection: Rejection | None = None
     outcome: ExecutionOutcome | None = None
     report: VerificationReport | None = None
+    explained: Explained | None = None
     error: dict[str, Any] | None = None
     events: tuple[Any, ...] = ()
 
     @property
     def verified(self) -> bool:
-        return self.status == "EXPLAINING"
+        """Whether every published number survived all five layers.
+
+        True of a ``COMPLETED`` run and of one still holding at ``EXPLAINING``.
+        The distinction between those two is whether anything has been *said*,
+        which is a different question from whether the numbers are trustworthy.
+        """
+        return self.status in {"EXPLAINING", "COMPLETED"}
+
+    @property
+    def answer(self) -> Explanation | None:
+        return None if self.explained is None else self.explained.explanation
+
+    @property
+    def response_source(self) -> str | None:
+        return None if self.explained is None else self.explained.source
 
 
 async def answer(
@@ -209,6 +230,72 @@ async def answer(
             },
         )
         await machine.to(conn, status, error_json=verdict)
+        if machine.state == "BLOCKED":
+            await log.append(conn, "execution.finished", {"status": machine.state})
+            return AgentRun(
+                execution_id=identifier,
+                status=machine.state,
+                intent=intent,
+                plan=plan,
+                outcome=outcome,
+                report=report,
+                error=verdict,
+                events=log.recorded,
+            )
+
+    # ---- EXPLAINING --------------------------------------------------------
+    # Verified, and still silent. Everything below phrases numbers that are
+    # already true; nothing below may change one.
+    try:
+        explained = await explain(
+            EvidenceSet(rows),
+            provider=provider,
+            question=question,
+            merchant_id=merchant_id,
+            limitations=outcome.limitations(),
+        )
+    except TemplateGroundingError as error:
+        # The fallback itself failed the grounding gate. There is no third
+        # option below a deterministic render of verified rows, and shipping
+        # unchecked prose is not one, so the run fails with its numbers intact
+        # and unsaid.
+        async with connection() as conn:
+            return await _fail(
+                conn,
+                machine,
+                log,
+                identifier,
+                "EXPLANATION_FAILED",
+                str(error),
+                {},
+                intent=intent,
+                plan=plan,
+                outcome=outcome,
+                report=report,
+            )
+
+    async with connection() as conn:
+        await log.append(
+            conn,
+            "explanation.grounded",
+            {
+                "source": explained.source,
+                "attempts": explained.grounding_attempts,
+                "claims": len(explained.explanation.claims),
+                "checks": len(explained.grounding.checks),
+                "reason": explained.reason,
+            },
+        )
+        await machine.to(
+            conn,
+            "COMPLETED",
+            {"response_source": explained.source},
+            response_source=explained.source,
+            grounding_attempts=explained.grounding_attempts,
+            answer_text=explained.explanation.narrative,
+            claims_json=[claim.model_dump(mode="json") for claim in explained.explanation.claims],
+            completed_at=func.now(),
+        )
         await log.append(conn, "execution.finished", {"status": machine.state})
 
     return AgentRun(
@@ -218,7 +305,7 @@ async def answer(
         plan=plan,
         outcome=outcome,
         report=report,
-        error=verdict,
+        explained=explained,
         events=log.recorded,
     )
 

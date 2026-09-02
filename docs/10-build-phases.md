@@ -230,6 +230,25 @@ before execution starts
   bridge via template
 - `response_source` is persisted on every execution
 
+All four hold, in `tests/test_explainer.py`, `tests/test_grounding.py` and `tests/test_agent_db.py`.
+Three notes:
+
+**The strongest test in the phase is that the fallback passes the gate.** `compose()` builds an
+`Explanation` from evidence rows, and `check_grounding()` runs the same five checks over it that
+the model's answer must pass. A fallback held to a weaker standard is not a fallback, and the only
+way to know the two paths are held to one is to run the standard over both.
+
+**Check 3 catches the near miss twice.** A claim declaring `0.958` where the row says `0.958012`
+fails on the value. A claim declaring `0.958012` and writing "95.8%" in the sentence fails on the
+prose. Both are the same defect at different depths, and only the second is the one that reaches a
+reader.
+
+**The answer needed a column.** `agent_executions` had `response_source` and `grounding_attempts`
+and nowhere to put the text they describe
+([D-49](decisions.md#d-49--the-answer-gets-a-column-and-prose-is-tied-to-its-origin)).
+
+**Do not build yet.** The UI.
+
 ---
 
 ## Phase 8 — API surface

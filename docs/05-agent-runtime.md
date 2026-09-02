@@ -83,7 +83,7 @@ COMPLETED                                          (terminal)
 | `PARTIAL` | Some tools failed, enough succeeded to answer | `VERIFYING` |
 | `VERIFYING` | Per-tool + cross-tool checks | `EXPLAINING`, `BLOCKED` |
 | `BLOCKED` | Verification failed; **no explanation is generated** | terminal |
-| `EXPLAINING` | Evidence assembly, LLM, grounding | `COMPLETED` |
+| `EXPLAINING` | Evidence assembly, LLM, grounding | `COMPLETED`, `FAILED` |
 | `COMPLETED` | Answer delivered (possibly `TEMPLATE_FALLBACK`) | terminal |
 | `FAILED` | Infrastructure failure | terminal |
 

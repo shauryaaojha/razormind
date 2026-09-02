@@ -52,6 +52,7 @@ MONEY_BEARING = (
     "evidence",
     "verification",
     "provenance",
+    "narrative",
     "routes",
 )
 

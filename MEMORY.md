@@ -118,8 +118,9 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
 | 4 — Remaining tools | **Done.** `payments.failure_analysis`, `finance.refund_analysis`, `risk.chargeback_analysis`, metric vocabulary enforced at import |
 | 5 — Trust layer | **Done.** Five verification layers, cross-tool consistency, evidence persistence, provenance walk, `GET /executions/{id}/evidence/{evidence_id}`. 304 + 88 tests |
 | 6 — Agent runtime | **Done.** Intent parser + confidence gate, deterministic planner, eleven validation gates, concurrent DAG executor, nine-state machine, event log. 359 + 104 tests |
-| 7 — Explainer | next. Grounding, byte-match, template fallback |
-| 8–12 | not started |
+| 7 — Explainer | **Done.** Five grounding checks, byte-match on value *and* prose, regenerate-once, deterministic template below the model boundary, answer persisted. 396 + 106 tests |
+| 8 — API surface | next. SSE, idempotency, OpenAPI gate |
+| 9–12 | not started |
 
 ### Notes from Phase 0 worth not rediscovering
 
@@ -341,3 +342,29 @@ Full detail: [`docs/08-seed-data.md`](docs/08-seed-data.md).
   asked, verified and cited.
 - **`task.py` grew argument pass-through** for `ask`, checked before the unknown-target scan so
   a question is not read as a list of targets.
+
+### Notes from Phase 7 worth not rediscovering
+
+- **The template renderer is a package below `llm`, not a module inside it.** A fallback that
+  could call a model fails at the one moment it exists for. `narrative/` is in contract 1 and
+  below `llm` in contract 2.
+  → [D-50](docs/decisions.md#d-50--the-template-renderer-sits-below-the-model-boundary-not-beside-it)
+- **Check 3 is two checks.** The declared value must byte-match the row, *and* the prose must
+  write it. A model that declares `0.958012` and writes `95.8%` passes the first and fails the
+  second, and only the second reaches a reader.
+- **`agent_executions` had `response_source` and no column for the answer** since 0001.
+  Migration 0004 adds `answer_text` + `claims_json` with a bidirectional constraint.
+  → [D-49](docs/decisions.md#d-49--the-answer-gets-a-column-and-prose-is-tied-to-its-origin)
+- **Digits in prose that are not claims:** only the execution's own windows and the merchant
+  id, masked before tokenising, derived from the evidence rather than passed in. This is also
+  why template lines are labelled from the metric id and not from the vocabulary descriptions,
+  which cite corrections by number (`rules 1-4`, `(D-20)`).
+- **The unsigned magnitude is accepted for a signed value.** English puts the sign in the verb,
+  and no byte-match can catch "revenue rose by -17.6%" anyway.
+  → [D-48](docs/decisions.md#d-48--grounding-checks-magnitude-and-unit-the-direction-word-goes-unchecked)
+- **`EVENT_KINDS` is a closed list and it caught the new event.** Adding
+  `explanation.grounded` was a required edit, not an optional one -- which is the point of the
+  registry.
+- **Scripted providers refuse the explanation call** (`ask.py`, `test_agent_db.py`): scripting a
+  grounded answer over 123 real evidence rows would mean writing the explainer in the test.
+  Refusing exercises the template path, which is what a deployment with no key does anyway.

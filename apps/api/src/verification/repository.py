@@ -17,12 +17,14 @@ VERIFYING  -> BLOCKED      a layer failed; error_json names it; no prose, ever
 nobody else's. Writing `COMPLETED` here would claim an answer exists when the
 only thing that exists is permission to write one.
 
-`response_source` stays `NULL` throughout, which is the persisted form of "no
-text was generated". A blocked execution with a `response_source` would be a
+`response_source` stays `NULL` through verification, which is the persisted
+form of "no text was generated". Phase 7 writes it, together with the answer
+itself, and a database constraint keeps the two in step in both directions: a
+blocked execution with a `response_source` -- or with prose -- would be a
 contradiction the database can be asked about.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 from uuid import UUID
@@ -56,6 +58,12 @@ class StoredExecution:
     status: str
     response_source: str | None
     error: dict[str, Any] | None
+    #: The generated answer, and the claims grounding checked it against. Both
+    #: are ``None`` until an execution reaches ``COMPLETED``, and both stay
+    #: ``None`` forever on one that did not.
+    answer: str | None = None
+    claims: list[dict[str, Any]] = field(default_factory=list)
+    grounding_attempts: int = 0
 
     @property
     def blocked(self) -> bool:
@@ -155,4 +163,7 @@ async def read_execution(conn: AsyncConnection, execution_id: UUID) -> StoredExe
         status=row.status,
         response_source=row.response_source,
         error=row.error_json,
+        answer=row.answer_text,
+        claims=list(row.claims_json or []),
+        grounding_attempts=row.grounding_attempts,
     )

@@ -51,7 +51,7 @@ before anything non-deterministic touches it.
  5  Trust layer         verification, evidence, provenance          [DONE]
 ------------------------------------------------------------------  first LLM call
  6  Agent runtime       intent, plan, validate, execute, state    [DONE]
- 7  Explainer           grounding, template fallback
+ 7  Explainer           grounding, template fallback              [DONE]
  8  API surface         SSE streaming, OpenAPI contract
  9  Web application     chat, dashboard, exceptions, provenance
 10  Failure & recovery  fault injection, graceful degradation
@@ -183,9 +183,9 @@ image, which is why "works on my machine" and "passes CI" are not separate claim
 
 ## Status
 
-**Phases 0 through 6 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
-contracts, the no-float guard, the ten fixture assertions, and 359 tests with 100% branch
-coverage on `runtime/`. A further 104 integration tests run against a real Postgres.
+**Phases 0 through 7 complete.** `check` is green: ruff, mypy `--strict`, three import-linter
+contracts, the no-float guard, the ten fixture assertions, and 396 tests with 100% branch
+coverage on `runtime/`. A further 106 integration tests run against a real Postgres.
 
 The three boundary mechanisms exist before any domain logic does, which is the point of the phase:
 
@@ -520,9 +520,95 @@ from `registry.describe()`, and `validation/plan_validator.py` does not change �
 plan passes the same eleven gates. That is what makes handing planning to a model a swap rather
 than a re-audit.
 
-**Next: Phase 7 — the explainer and grounding.** Prose that cannot contain an ungrounded number:
-claim extraction, five grounding checks including a byte-match against the verified metric,
-regenerate-once, then a deterministic template fallback.
+Phase 7 let the system speak, under a gate that makes an ungrounded number impossible.
+
+### Five checks between a verified number and a sentence
+
+The explainer receives the metrics, their units, their windows, the exact string each one is
+written as, and the formula that produced the derived ones. It does not receive the database, the
+tools, or any figure that has not already passed all five verification layers. Its entire
+privilege is word order.
+
+Its output is then parsed back and checked:
+
+```text
+1. every numeric token in the prose belongs to a claim
+2. every claim names a metric the vocabulary registers
+3. every claim's value byte-matches the verified row, AND the prose says that value
+4. every claim's unit is the one the vocabulary declares
+5. every claim's evidence id resolves to a row this execution published
+```
+
+Check 3 is the one that earns the phase, and it is two checks wearing one name. A model can
+declare the exact figure in the structured field and write a rounded one in the sentence a human
+reads — which is the original spec's defect exactly. So every number inside a claim's own span is
+matched against the accepted renderings of the verified value.
+
+```text
+verified 0.958012      "95.8012%"  ok
+                       "95.80%"    rejected: that is 0.958000, a different number
+                       "95.8%"     rejected
+verified -1.34 pp      "-1.34"     ok
+                       "1.34"      ok — the sign lives in the verb (D-48)
+                       "-1.34%"    rejected: a point is not a percent (C-04)
+```
+
+Stripping a trailing zero is not rounding, so `95.80%` *is* accepted for `0.958000`. The
+distinction is the whole design: admit every spelling that loses no digit, and nothing else.
+
+### Regenerate once, then fall back
+
+```text
+attempt 1 -> grounded?  -> answer, response_source = LLM
+          -> no: hand back every failure, by name
+attempt 2 -> grounded?  -> answer, response_source = LLM
+          -> no        -> template, response_source = TEMPLATE_FALLBACK
+```
+
+Handing the failures back is what makes one retry worth having. "Try again" re-rolls the dice;
+"you wrote 95.8%, the verified figure is 95.8012%" is a correction, and most grounding failures
+are that kind of near miss. A provider failure skips the retry entirely — a missing model does not
+become present on a second call.
+
+### The floor: no model at all, and the numbers still arrive
+
+```text
+$ python scripts/task.py ask --canned revenue_diagnosis "Why did net revenue fall in August?"
+
+ANSWER
+  source      TEMPLATE_FALLBACK
+  attempts    0
+  grounding   1107 checks
+  fell back   PROVIDER_UNAVAILABLE
+
+  finance.revenue_analysis  [2026-08-01, 2026-08-24)
+  - Attempted value (attempted_value_paise): ₹4,31,340.00
+  - Gross payments (gross_payments_paise): ₹4,06,260.00
+  - Refunds (refunds_paise): ₹11,782.00
+  - Fees (fees_paise): ₹2,608.05
+  - Chargebacks (chargebacks_paise): ₹1,747.00
+  - Net revenue (net_revenue_paise): ₹3,90,122.95
+  - Net revenue change (net_revenue_change_paise): -₹83,301.87
+  - Net revenue change (net_revenue_change_ratio): -17.5956%
+```
+
+**Degrade the prose, never the numbers.** The template is assembled from the evidence rows and
+nothing else — no knowledge of revenue, refunds or reconciliation — so a tool that starts
+publishing a new metric appears here without anyone editing a paragraph.
+
+And it is subject to the same five checks. `tests/test_grounding.py` asserts that the template
+passes the gate it exists to be the fallback for, which is the strongest test in the phase: a
+fallback judged more leniently than the thing it replaces is not a fallback, it is a way around
+the gate. That is also why the template renderer lives in `narrative/`, **below** the model
+boundary in the import contract — a fallback that could itself call a model would fail at exactly
+the moment it is needed ([D-50](docs/decisions.md#d-50--the-template-renderer-sits-below-the-model-boundary-not-beside-it)).
+
+If the template itself ever failed grounding, the run fails. There is no floor below a
+deterministic render of verified rows, and unchecked prose is not one.
+
+**Next: Phase 8 — the API surface.** `POST /agent/runs` with idempotency, the SSE event stream that
+replays `execution_events` so a finished run and a live one render through one component, and an
+OpenAPI contract diffed in CI.
 
 ---
 

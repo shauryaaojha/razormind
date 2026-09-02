@@ -25,7 +25,8 @@ from sqlalchemy import func, select
 from evidence.models import Evidence
 from evidence.repository import load_evidence
 from intent.models import Intent, IntentPeriod
-from llm.provider import Completion, DisabledProvider
+from llm.provider import Completion, DisabledProvider, ProviderUnavailableError
+from narrative.render import canonical
 from orchestrator.events import EventLog
 from orchestrator.executor import execute_plan
 from orchestrator.planner import RECONCILE
@@ -33,7 +34,12 @@ from orchestrator.runtime import answer
 from orchestrator.state import IllegalTransitionError, StateMachine
 from plan.models import ExecutionPlan, PlanNode
 from runtime.db import connection
-from runtime.schema import execution_events, reconciliation_runs, tool_executions
+from runtime.schema import (
+    agent_executions,
+    execution_events,
+    reconciliation_runs,
+    tool_executions,
+)
 from tools.base import DeterministicTool, ToolContext, ToolError, ToolInput
 from tools.registry import ToolRegistry
 from verification.models import Checks, VerificationResult
@@ -51,7 +57,15 @@ JULY = {"from": "2026-07-01", "to": "2026-07-24"}
 
 
 class ScriptedProvider:
-    """The model, replaced by exactly what it would have said."""
+    """The model, replaced by exactly what it would have said.
+
+    It answers intent requests and refuses explanation requests, which is the
+    configured state of this project: an intent is small enough to script
+    faithfully, and a grounded explanation of a hundred and twenty-three real
+    evidence rows is not something a test can write without becoming the
+    explainer. Refusing sends the run down the template path, which is also
+    what a deployment with no API key does.
+    """
 
     name = "scripted"
 
@@ -74,7 +88,9 @@ class ScriptedProvider:
         max_tokens: int,
         timeout_seconds: int,
     ) -> Completion:
-        del system, prompt, schema, max_tokens, timeout_seconds
+        del system, prompt, max_tokens, timeout_seconds
+        if "narrative" in schema.get("properties", {}):
+            raise ProviderUnavailableError("this scripted provider only parses intents")
         return Completion(text=self._body, model="scripted", input_tokens=0, output_tokens=0)
 
     def impersonate(self, merchant_id: str) -> None:
@@ -114,11 +130,11 @@ async def events_for(execution_id: uuid.UUID) -> list[Any]:
 # --------------------------------------------------------------------------
 
 
-async def test_a_revenue_question_runs_to_a_verified_state() -> None:
+async def test_a_revenue_question_runs_to_a_verified_answer() -> None:
     result = await run(
         ScriptedProvider(intent="revenue_diagnosis", period=AUGUST, comparison_period=JULY)
     )
-    assert result.status == "EXPLAINING", result.error
+    assert result.status == "COMPLETED", result.error
     assert result.report is not None
     assert result.report.passed
     assert result.plan is not None
@@ -128,10 +144,53 @@ async def test_a_revenue_question_runs_to_a_verified_state() -> None:
         stored = await read_execution(conn, result.execution_id)
         published = await load_evidence(conn, result.execution_id)
     assert stored is not None
-    assert stored.status == "EXPLAINING"
-    # No prose has been written, and none may be until Phase 7.
-    assert stored.response_source is None
+    assert stored.status == "COMPLETED"
     assert len(published) == 123
+
+    # No model was available for the explanation, so the template answered --
+    # with every verified figure, and labelled as what it is.
+    assert stored.response_source == "TEMPLATE_FALLBACK"
+    assert stored.grounding_attempts == 0
+    assert stored.answer is not None
+    assert len(stored.claims) == len(published)
+
+
+async def test_the_template_answer_carries_the_whole_verified_bridge() -> None:
+    """The exit criterion: no model at all, and the user still gets the bridge."""
+    result = await run(
+        ScriptedProvider(intent="revenue_diagnosis", period=AUGUST, comparison_period=JULY)
+    )
+    assert result.explained is not None
+    assert result.explained.source == "TEMPLATE_FALLBACK"
+    assert result.explained.grounding.passed
+
+    narrative = result.explained.explanation.narrative
+    async with connection() as conn:
+        published = await load_evidence(conn, result.execution_id)
+    for metric_id in (
+        "gross_payments_paise",
+        "refunds_paise",
+        "fees_paise",
+        "chargebacks_paise",
+        "net_revenue_paise",
+        "net_revenue_change_ratio",
+    ):
+        row = next(row for row in published if row.metric_id == metric_id)
+        assert canonical(row.value, row.unit) in narrative, metric_id
+
+
+async def test_a_blocked_execution_writes_no_prose_and_no_source() -> None:
+    """Invariant 4, persisted: no text, and nothing claiming there is any."""
+    async with connection() as conn:
+        rows = (
+            await conn.execute(
+                select(agent_executions.c.answer_text, agent_executions.c.response_source).where(
+                    agent_executions.c.status == "BLOCKED"
+                )
+            )
+        ).all()
+    for row in rows:
+        assert row.answer_text is None and row.response_source is None
 
 
 async def test_every_transition_has_an_event_with_a_monotonic_seq() -> None:
@@ -148,6 +207,7 @@ async def test_every_transition_has_an_event_with_a_monotonic_seq() -> None:
         "EXECUTING",
         "VERIFYING",
         "EXPLAINING",
+        "COMPLETED",
     ]
     # Every state the execution passed through is followed by the one it moved
     # to, with no gap: the log is the audit trail, not a summary of it.
@@ -179,7 +239,7 @@ async def test_a_narrow_intent_runs_a_narrow_plan() -> None:
     result = await run(
         ScriptedProvider(intent="refund_analysis", period=AUGUST, comparison_period=JULY)
     )
-    assert result.status == "EXPLAINING", result.error
+    assert result.status == "COMPLETED", result.error
     assert result.plan is not None
     assert [node.tool for node in result.plan.nodes] == [
         "finance.reconciliation",
@@ -457,8 +517,6 @@ async def test_the_intent_and_plan_are_persisted_on_the_execution() -> None:
         ScriptedProvider(intent="revenue_diagnosis", period=AUGUST, comparison_period=JULY)
     )
     async with connection() as conn:
-        from runtime.schema import agent_executions
-
         row = (
             await conn.execute(
                 select(agent_executions).where(agent_executions.c.id == result.execution_id)

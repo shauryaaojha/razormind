@@ -45,6 +45,21 @@ router = APIRouter(prefix="/executions", tags=["executions"])
 MAX_PAGE = 500
 
 
+class AnswerClaim(BaseModel):
+    """One span of the answer, and the evidence id it resolves to.
+
+    This is what makes a number in the prose clickable: the UI does not parse
+    the text looking for figures, it renders the spans the grounding gate
+    already matched.
+    """
+
+    text: str
+    metric_id: str
+    value: int | str
+    unit: str
+    evidence_id: str
+
+
 class ExecutionSummary(BaseModel):
     execution_id: str
     merchant_id: str
@@ -55,6 +70,12 @@ class ExecutionSummary(BaseModel):
     #: keeps it ``None`` forever, which is the persisted form of "no text was
     #: generated" (Invariant 4).
     response_source: str | None
+    #: The answer, and the claims grounding checked it against. Served together
+    #: with ``response_source`` because a reader deciding how much to trust a
+    #: sentence needs to know whether a model wrote it.
+    answer: str | None
+    claims: list[AnswerClaim]
+    grounding_attempts: int
     error: dict[str, Any] | None
 
 
@@ -150,6 +171,9 @@ async def get_execution(execution_id: UUID) -> ExecutionSummary:
         period_to=stored.period_to.isoformat() if stored.period_to else None,
         status=stored.status,
         response_source=stored.response_source,
+        answer=stored.answer,
+        claims=[AnswerClaim.model_validate(claim) for claim in stored.claims],
+        grounding_attempts=stored.grounding_attempts,
         error=stored.error,
     )
 

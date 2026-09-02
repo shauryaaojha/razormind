@@ -890,3 +890,80 @@ things. Contract 1 is about a boundary nothing may cross by any route. Contract 
 boundary that must be crossed at exactly one place.
 
 **Cost to reverse.** Low.
+
+---
+
+### D-48 — Grounding checks magnitude and unit; the direction word goes unchecked
+
+**Decision.** For a signed metric, the unsigned magnitude is an accepted rendering. "Net revenue
+fell by ₹79,976.36" grounds against `-7997636` paise, and so does "changed by -₹79,976.36".
+
+**Why.** Two things pushed this, and the second is the one that decides it.
+
+English carries the sign in the verb. Nearly every honest sentence about a decline writes the
+magnitude and says "fell", and requiring a minus sign inside the prose would send most correct
+answers to the template — which is a real cost, because the template is a table and the model's
+version is a paragraph a person can read.
+
+More importantly, requiring it would buy nothing. "Revenue rose by -17.5956%" byte-matches
+perfectly and is nonsense; "revenue fell by 17.5956%" fails and is correct. A byte-match cannot
+tell those apart, because the thing that differs is a verb. What the gate *can* check is that no
+digit was invented, rescaled, rounded, or attached to the wrong unit, and it checks all four
+exactly.
+
+So the boundary is stated rather than blurred: **grounding is a check on the numbers, not on the
+sentence**. The residual exposure is a model that writes a direction backwards, and the mitigation
+is that every claim carries the evidence id — a reader who doubts the sentence opens the row.
+
+**Cost to reverse.** Low; it is one entry in `narrative/render.py`. Tightening it later would make
+the template the usual answer, which is worth knowing before doing it.
+
+---
+
+### D-49 — The answer gets a column, and prose is tied to its origin
+
+**Decision.** `agent_executions` gains `answer_text` and `claims_json` (migration 0004), plus
+`CHECK ((answer_text IS NULL) = (response_source IS NULL))`.
+
+**Why.** The table carried `response_source` and `grounding_attempts` from 0001 — a label saying
+where the answer came from and a counter saying how hard it was to get — and no column for the
+answer. Both were written before anything generated text, and the gap only becomes visible when
+something does: `response_source = 'LLM'` on a row with no text is a statement about a sentence the
+database never saw.
+
+The constraint is bidirectional on purpose. Text with no declared source cannot be labelled, and
+"who wrote this" is the first question a reader of a generated financial summary asks. A source
+with no text claims something was written when nothing was — which is exactly the shape a
+`BLOCKED` execution must never be able to take, and now cannot, at the level below the application.
+
+`claims_json` is stored beside the prose rather than re-derived later. The claims are *what
+grounding checked*: each one pins a span of the answer to an evidence id, which is also what makes
+a number in the UI clickable. Re-extracting them afterwards would be a second, unverified parse of
+the same text, and the two parses would disagree the first time somebody changed a regex.
+
+**Cost to reverse.** Low, but the constraint is the part worth keeping.
+
+---
+
+### D-50 — The template renderer sits below the model boundary, not beside it
+
+**Decision.** `narrative/` is its own package: `render.py`, `models.py`, `template.py`. It sits
+below `llm` in contract 2 and is listed in contract 1, so it cannot reach a model by any route.
+`llm/explainer.py` and `llm/grounding.py` import *down* into it.
+
+**Why.** The template is what the system falls back to when the model is gone or twice ungrounded.
+A fallback that could itself call a model is not a fallback, and the failure would arrive at the
+worst possible moment — the model being unavailable is exactly when the fallback runs.
+
+Putting it inside `llm/` would have made that a code-review convention. The build now fails
+instead. It costs one package.
+
+Two things follow that are worth having anyway. `Claim` and `Explanation` live below both
+producers, so the model's answer and the template's answer are the same type and go through the
+same five checks — a fallback judged by a weaker gate is a way around the gate. And
+`narrative/render.py` becomes the one place that decides how a number is written, which is what
+lets grounding byte-match at all: the template writes the canonical form and the gate accepts the
+spellings that lose no digit, from one list.
+
+**Cost to reverse.** Low mechanically. The reason not to is that the arrangement is what makes
+"the numbers never depend on a third party" checkable rather than asserted.

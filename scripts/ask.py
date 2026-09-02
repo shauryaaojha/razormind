@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps" / "api" / "src"))
 
 from config.settings import get_settings  # noqa: E402
-from llm.provider import Completion, get_provider  # noqa: E402
+from llm.provider import Completion, ProviderUnavailableError, get_provider  # noqa: E402
 from orchestrator.runtime import answer  # noqa: E402
 
 MERCHANT = "M123"
@@ -46,7 +46,14 @@ CANNED_PERIODS: dict[str, Any] = {
 
 
 class CannedProvider:
-    """A stand-in for the model, and it says so."""
+    """A stand-in for the model, and it says so.
+
+    It scripts the *intent* and refuses everything else. Scripting the
+    explanation too would mean writing a grounded answer over a hundred-odd
+    real evidence rows by hand, which is the explainer's job; refusing sends
+    the run down the template path, which is what a deployment with no API key
+    does anyway.
+    """
 
     name = "canned"
 
@@ -71,7 +78,9 @@ class CannedProvider:
         max_tokens: int,
         timeout_seconds: int,
     ) -> Completion:
-        del system, prompt, schema, max_tokens, timeout_seconds
+        del system, prompt, max_tokens, timeout_seconds
+        if "narrative" in schema.get("properties", {}):
+            raise ProviderUnavailableError("the canned provider only scripts intents")
         return Completion(text=self._body, model="canned", input_tokens=0, output_tokens=0)
 
 
@@ -144,14 +153,26 @@ async def main(question: str, canned: str | None) -> int:
                 print(f"       {failure}")
         print()
 
+    if result.explained is not None:
+        source = result.explained
+        print("ANSWER")
+        print(f"  source      {source.source}")
+        print(f"  attempts    {source.grounding_attempts}")
+        print(f"  grounding   {len(source.grounding.checks)} checks")
+        if source.reason is not None:
+            print(f"  fell back   {source.reason}")
+        print()
+        for line in source.explanation.narrative.splitlines():
+            print(f"  {line}")
+        print()
+        for limitation in source.explanation.limitations:
+            print(f"  ! {limitation}")
+
     if result.error is not None:
         print("ERROR")
         print(f"  {result.error['code']}: {result.error['message']}")
 
-    if result.status == "EXPLAINING":
-        print("Verified. Phase 7 is what turns this into a sentence.")
-        return 0
-    return 1
+    return 0 if result.status == "COMPLETED" else 1
 
 
 if __name__ == "__main__":
