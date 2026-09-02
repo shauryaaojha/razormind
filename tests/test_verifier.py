@@ -585,3 +585,56 @@ class TestEvidenceRefusesTheImpossible:
             {"current": 39012295, "prior": 47342482},
         )
         assert row.value == -8330187
+
+
+class TestTheLayerObserver:
+    """One announcement per layer, as it finishes, in the order they ran.
+
+    The observer exists so a watcher sees a *sequence that stops* rather than a
+    summary. Reporting five results at the end would leave a UI two choices,
+    both wrong: animate them on a timer, inventing durations nobody measured, or
+    show them arriving at once, which is a summary wearing a sequence's clothes.
+    """
+
+    async def test_every_layer_is_announced_once_in_order(self) -> None:
+        seen: list[tuple[str, bool]] = []
+
+        async def watch(layer: object, duration_ms: int) -> None:
+            assert duration_ms >= 0
+            seen.append((layer.layer, layer.passed))  # type: ignore[attr-defined]
+
+        report = await verify_execution([outcome(bridge_rows())], bridge_sources(), on_layer=watch)
+        assert report.passed
+        assert [name for name, _ in seen] == list(LAYERS)
+        assert all(passed for _, passed in seen)
+
+    async def test_a_blocked_run_announces_the_layers_that_ran_and_no_more(self) -> None:
+        class Loose(BaseModel):
+            gross_payments_paise: float
+
+        seen: list[str] = []
+
+        async def watch(layer: object, duration_ms: int) -> None:
+            del duration_ms
+            seen.append(layer.layer)  # type: ignore[attr-defined]
+
+        report = await verify_execution(
+            [outcome(bridge_rows(), Loose(gross_payments_paise=3000.0))],
+            bridge_sources(),
+            on_layer=watch,
+        )
+        assert report.blocked_at == "TYPE"
+        # Not four silent passes and a failure: the layers below never ran, and
+        # a watcher that heard about them would be told they were fine.
+        assert seen == ["TYPE"]
+
+    async def test_the_observer_cannot_change_the_verdict(self) -> None:
+        async def watch(layer: object, duration_ms: int) -> None:
+            del layer, duration_ms
+
+        with_watcher = await verify_execution(
+            [outcome(bridge_rows())], bridge_sources(), on_layer=watch
+        )
+        without = await verify_execution([outcome(bridge_rows())], bridge_sources())
+        assert with_watcher.passed == without.passed
+        assert with_watcher.checks == without.checks

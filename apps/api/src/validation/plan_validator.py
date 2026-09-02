@@ -35,6 +35,7 @@ from .policy import Policy
 
 __all__ = [
     "REJECTION_CODES",
+    "Gate",
     "Rejection",
     "ValidationOutcome",
     "validate_plan",
@@ -75,10 +76,34 @@ class Rejection:
 
 
 @dataclass(frozen=True)
+class Gate:
+    """One gate, and what it found.
+
+    ``applied`` is false for a gate with nothing to judge: there is no overlap
+    to check between two windows when the plan carries one, and no reference to
+    resolve in a node that takes none. Reported rather than omitted, because
+    "there was nothing here to check" and "this was not checked" are different
+    sentences and only one of them is reassuring.
+
+    This is the shape the trace renders. A validator that reported only its
+    refusals could not say the thing worth saying about an approved plan --
+    that eleven gates were applied and none of them objected.
+    """
+
+    code: str
+    applied: bool
+    passed: bool
+
+
+@dataclass(frozen=True)
 class ValidationOutcome:
     """Every reason the plan was refused, or none."""
 
     rejections: tuple[Rejection, ...]
+    #: Every gate in ``REJECTION_CODES`` order, whether or not it fired.
+    #: Defaulted so a caller constructing an outcome by hand -- a test asserting
+    #: on refusals -- is not obliged to enumerate eleven passing gates.
+    gates: tuple[Gate, ...] = ()
 
     @property
     def approved(self) -> bool:
@@ -119,19 +144,42 @@ def parse_plan(raw: Mapping[str, Any]) -> ExecutionPlan | Rejection:
 
 
 def validate_plan(plan: ExecutionPlan, policy: Policy, registry: ToolRegistry) -> ValidationOutcome:
-    """Every gate, all of them evaluated."""
+    """Every gate, all of them evaluated.
+
+    Each helper returns the gates it was in a position to apply alongside the
+    rejections it found, so the outcome can report the whole panel rather than
+    only the parts that objected.
+    """
+    # Satisfied by construction: the argument is an ``ExecutionPlan``, so
+    # either ``parse_plan`` accepted the dict or the planner built the object,
+    # and both go through the same model. Recorded because the gate is real and
+    # a panel that silently omitted it would be a panel of ten.
+    applied: list[str] = ["INVALID_PLAN_SCHEMA"]
     found: list[Rejection] = []
-    found.extend(_scope(plan, policy))
-    found.extend(_periods(plan, policy))
-    found.extend(_graph(plan))
-    found.extend(_nodes(plan, policy, registry))
-    return ValidationOutcome(tuple(found))
+    for gates, rejections in (
+        _scope(plan, policy),
+        _periods(plan, policy),
+        _graph(plan),
+        _nodes(plan, policy, registry),
+    ):
+        applied.extend(gates)
+        found.extend(rejections)
+
+    refused = {rejection.code for rejection in found}
+    return ValidationOutcome(
+        tuple(found),
+        tuple(
+            Gate(code=code, applied=code in applied, passed=code not in refused)
+            for code in REJECTION_CODES
+        ),
+    )
 
 
 # --------------------------------------------------------------------------
 
 
-def _scope(plan: ExecutionPlan, policy: Policy) -> list[Rejection]:
+def _scope(plan: ExecutionPlan, policy: Policy) -> tuple[list[str], list[Rejection]]:
+    """Both gates always apply: every plan names a merchant and a currency."""
     found: list[Rejection] = []
     if plan.merchant_id != policy.merchant_id:
         found.append(
@@ -149,10 +197,17 @@ def _scope(plan: ExecutionPlan, policy: Policy) -> list[Rejection]:
                 {"requested": plan.currency},
             )
         )
-    return found
+    return ["MERCHANT_SCOPE_VIOLATION", "UNSUPPORTED_CURRENCY"], found
 
 
-def _periods(plan: ExecutionPlan, policy: Policy) -> list[Rejection]:
+def _periods(plan: ExecutionPlan, policy: Policy) -> tuple[list[str], list[Rejection]]:
+    """Ordering always applies; coverage and overlap do not always have a subject.
+
+    A window that starts after it ends is not asked whether it is inside the
+    dataset -- the answer would be about a range that does not exist -- and a
+    plan with one window has no overlap to check.
+    """
+    applied = ["INVALID_PERIOD"]
     found: list[Rejection] = []
     windows = [("period", plan.period)]
     if plan.comparison_period is not None:
@@ -167,7 +222,10 @@ def _periods(plan: ExecutionPlan, policy: Policy) -> list[Rejection]:
                     {name: {"from": window.from_.isoformat(), "to": window.to.isoformat()}},
                 )
             )
-        elif not policy.covers(window.from_, window.to):
+            continue
+
+        applied.append("PERIOD_OUT_OF_RANGE")
+        if not policy.covers(window.from_, window.to):
             found.append(
                 Rejection(
                     "PERIOD_OUT_OF_RANGE",
@@ -183,9 +241,11 @@ def _periods(plan: ExecutionPlan, policy: Policy) -> list[Rejection]:
             )
 
     comparison = plan.comparison_period
-    if comparison is not None and (
-        comparison.from_ < plan.period.to and plan.period.from_ < comparison.to
-    ):
+    if comparison is None:
+        return applied, found
+
+    applied.append("OVERLAPPING_PERIODS")
+    if comparison.from_ < plan.period.to and plan.period.from_ < comparison.to:
         # Not a stylistic objection. Payments in the overlap are counted on both
         # sides of the comparison, so the change between the two windows is
         # partly a comparison of a set with itself.
@@ -205,10 +265,12 @@ def _periods(plan: ExecutionPlan, policy: Policy) -> list[Rejection]:
                 },
             )
         )
-    return found
+    return applied, found
 
 
-def _graph(plan: ExecutionPlan) -> list[Rejection]:
+def _graph(plan: ExecutionPlan) -> tuple[list[str], list[Rejection]]:
+    """Always applies: every plan is a graph, even a graph of one node."""
+    gates = ["INVALID_DAG"]
     known = {node.id for node in plan.nodes}
     dangling = sorted(
         f"{node.id} -> {required}"
@@ -217,7 +279,7 @@ def _graph(plan: ExecutionPlan) -> list[Rejection]:
         if required not in known
     )
     if dangling:
-        return [
+        return gates, [
             Rejection(
                 "INVALID_DAG",
                 "A node depends on something that is not in the plan.",
@@ -227,11 +289,21 @@ def _graph(plan: ExecutionPlan) -> list[Rejection]:
     try:
         plan.topological_layers()
     except ValueError as error:
-        return [Rejection("INVALID_DAG", str(error), {"nodes": sorted(known)})]
-    return []
+        return gates, [Rejection("INVALID_DAG", str(error), {"nodes": sorted(known)})]
+    return gates, []
 
 
-def _nodes(plan: ExecutionPlan, policy: Policy, registry: ToolRegistry) -> list[Rejection]:
+def _nodes(
+    plan: ExecutionPlan, policy: Policy, registry: ToolRegistry
+) -> tuple[list[str], list[Rejection]]:
+    """Per node. The three gates below the tool lookup need a tool to apply to.
+
+    A node naming a tool nobody registered is not then asked whether the caller
+    may run it or whether its inputs typecheck: there is no input model to
+    check them against, and a rejection invented from the absence of one would
+    be a second complaint about the same missing tool.
+    """
+    applied = ["UNKNOWN_TOOL"]
     found: list[Rejection] = []
     by_id = {node.id: node for node in plan.nodes}
 
@@ -250,6 +322,9 @@ def _nodes(plan: ExecutionPlan, policy: Policy, registry: ToolRegistry) -> list[
             )
             continue
 
+        applied.extend(["INSUFFICIENT_PERMISSION", "MISSING_TOOL_INPUT"])
+        if node.references:
+            applied.append("UNRESOLVED_INPUT_REFERENCE")
         if not policy.permits(node.required_role):
             found.append(
                 Rejection(
@@ -261,7 +336,7 @@ def _nodes(plan: ExecutionPlan, policy: Policy, registry: ToolRegistry) -> list[
 
         found.extend(_references(node, by_id))
         found.extend(_inputs(node, tool.input_model, plan))
-    return found
+    return applied, found
 
 
 def _references(node: PlanNode, by_id: Mapping[str, PlanNode]) -> list[Rejection]:

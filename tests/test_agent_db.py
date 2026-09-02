@@ -42,8 +42,10 @@ from runtime.schema import (
 )
 from tools.base import DeterministicTool, ToolContext, ToolError, ToolInput
 from tools.registry import ToolRegistry
+from validation.plan_validator import REJECTION_CODES
 from verification.models import Checks, VerificationResult
 from verification.repository import open_execution, read_execution
+from verification.verifier import LAYERS
 
 pytestmark = pytest.mark.db
 
@@ -532,3 +534,57 @@ async def test_the_intent_and_plan_are_persisted_on_the_execution() -> None:
     ]
     assert row.period_from == date(2026, 8, 1)
     assert Intent.model_validate(row.intent_json).merchant_id == MERCHANT
+
+
+async def test_the_log_carries_the_run_internals_and_no_unverified_figure() -> None:
+    """What a watcher is shown while the run happens.
+
+    The trace is the audit trail *and* the thing a person watches, so what it
+    carries is a product decision rather than a logging one. It names the intent
+    the model chose, every gate that was applied, the shape of the graph, and
+    each verification layer as it finishes. It does not carry a single value
+    from a tool -- those rows have not been verified yet, and a stream carrying
+    them would let a client put unverified figures on screen in the same
+    typeface as verified ones (D-60).
+    """
+    result = await run(
+        ScriptedProvider(intent="revenue_diagnosis", period=AUGUST, comparison_period=JULY)
+    )
+    rows = await events_for(result.execution_id)
+    by_kind = {row.kind: row.payload_json for row in rows}
+
+    parsed = by_kind["intent.parsed"]
+    assert parsed["intent"] == "revenue_diagnosis"
+    assert parsed["period"] == {"from": "2026-08-01", "to": "2026-08-24"}
+
+    # Eleven gates reported, all applied, none refused -- the sentence an
+    # approved plan could not previously say.
+    gates = by_kind["plan.validated"]
+    assert by_kind["plan.validated"]["approved"] is True
+    assert len(gates["gates"]) == len(REJECTION_CODES)
+    assert all(gate["passed"] for gate in gates["gates"])
+
+    graph = {node["id"]: node for node in by_kind["plan.built"]["graph"]}
+    assert graph[RECONCILE]["required"] is True and graph[RECONCILE]["layer"] == 0
+    assert graph["revenue"]["depends_on"] == [RECONCILE] and graph["revenue"]["layer"] == 1
+
+    layers = [row.payload_json for row in rows if row.kind == "verification.layer"]
+    assert [layer["layer"] for layer in layers] == list(LAYERS)
+    assert all(layer["passed"] and layer["checks"] > 0 for layer in layers)
+
+    finished = [row.payload_json for row in rows if row.kind == "node.finished"]
+    published = {metric for node in finished for metric in node["metrics"]}
+    assert "net_revenue_paise" in published
+    for node in finished:
+        assert node["evidence_rows"] >= len(node["metrics"])
+        # Names and counts only. No key on this payload holds a figure.
+        assert set(node) == {
+            "node",
+            "tool",
+            "status",
+            "duration_ms",
+            "layer",
+            "metrics",
+            "evidence_rows",
+            "code",
+        }

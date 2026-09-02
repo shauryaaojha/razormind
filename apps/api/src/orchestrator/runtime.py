@@ -31,7 +31,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import func
 
 from evidence.builder import EvidenceSet
-from intent.models import Clarification, Intent
+from intent.models import Clarification, Intent, IntentPeriod
 from intent.parser import IntentParseError, parse_intent
 from llm.explainer import Explained, TemplateGroundingError, explain
 from llm.provider import LLMProvider
@@ -44,7 +44,13 @@ from validation.plan_validator import Rejection, ValidationOutcome, validate_pla
 from validation.policy import load_policy
 from verification.repository import open_execution, record_verification
 from verification.sources import DatabaseSources
-from verification.verifier import ToolOutcome, VerificationReport, verify_execution
+from verification.verifier import (
+    LAYERS,
+    LayerResult,
+    ToolOutcome,
+    VerificationReport,
+    verify_execution,
+)
 
 from .events import EventLog, RecordedEvent
 from .executor import ExecutionOutcome, execute_plan
@@ -149,6 +155,8 @@ async def answer(
                 {
                     "question": parsed.clarification.question,
                     "reason": parsed.clarification.reason,
+                    "confidence_ratio": str(parsed.clarification.confidence_ratio),
+                    "model": None if parsed.usage is None else parsed.usage.model,
                 },
             )
             await machine.to(conn, "NEEDS_CLARIFICATION")
@@ -161,15 +169,63 @@ async def answer(
 
         intent = parsed.intent
         assert intent is not None  # a ParseOutcome carries exactly one of the two
+
+        # The whole of the model's influence, written down where a reader can
+        # see it: a routing decision, two windows, and a confidence. Everything
+        # after this point is deterministic, and this event is what makes that
+        # claim checkable rather than a sentence in a document.
+        await log.append(
+            conn,
+            "intent.parsed",
+            {
+                "intent": intent.intent,
+                "period": _window(intent.period),
+                "comparison_period": _window(intent.comparison_period),
+                "confidence_ratio": str(intent.confidence_ratio),
+                "model": None if parsed.usage is None else parsed.usage.model,
+                "input_tokens": None if parsed.usage is None else parsed.usage.input_tokens,
+                "output_tokens": None if parsed.usage is None else parsed.usage.output_tokens,
+            },
+        )
+
         try:
             plan = build_plan(intent)
         except PlanningError as error:
             return await _fail(conn, machine, log, identifier, error.code, error.message, {})
 
+        try:
+            depth = {
+                node.id: index
+                for index, tier in enumerate(plan.topological_layers())
+                for node in tier
+            }
+        except ValueError:
+            # A cycle, which the DAG gate is about to refuse. The trace reports
+            # the plan as written and lets the rejection say why it cannot run;
+            # raising here would turn a structured rejection into a crash.
+            depth = {}
+
         await log.append(
             conn,
             "plan.built",
-            {"intent": plan.intent, "nodes": [node.id for node in plan.nodes]},
+            {
+                "intent": plan.intent,
+                "nodes": [node.id for node in plan.nodes],
+                # The shape, not only the count. Dependencies, the tier each
+                # node sits in, and which node the run cannot continue without
+                # -- a DAG rendered from a list of names is a list of names.
+                "graph": [
+                    {
+                        "id": node.id,
+                        "tool": node.tool,
+                        "version": node.version,
+                        "depends_on": list(node.depends_on),
+                        "required": node.required,
+                        "layer": depth.get(node.id),
+                    }
+                    for node in plan.nodes
+                ],
+            },
         )
         await machine.to(
             conn,
@@ -183,6 +239,18 @@ async def answer(
         # ---- VALIDATING ----------------------------------------------------
         policy = await load_policy(conn, merchant_id, role)
         validation = validate_plan(plan, policy, registry)
+        await log.append(
+            conn,
+            "plan.validated",
+            {
+                "approved": validation.approved,
+                "gates": [
+                    {"code": gate.code, "applied": gate.applied, "passed": gate.passed}
+                    for gate in validation.gates
+                ],
+                "refused": list(validation.codes),
+            },
+        )
         if not validation.approved:
             return await _reject(conn, machine, log, identifier, intent, plan, validation)
 
@@ -228,7 +296,24 @@ async def answer(
             for result in outcome.succeeded
             if result.output is not None
         ]
-        report = await verify_execution(outcomes, DatabaseSources(conn))
+
+        async def layer_finished(layer: LayerResult, duration_ms: int) -> None:
+            """One event per layer, as it finishes, in the order they run."""
+            await log.append(
+                conn,
+                "verification.layer",
+                {
+                    "layer": layer.layer,
+                    "index": LAYERS.index(layer.layer),
+                    "of": len(LAYERS),
+                    "checks": len(layer.checks),
+                    "failures": list(layer.failures),
+                    "passed": layer.passed,
+                    "duration_ms": duration_ms,
+                },
+            )
+
+        report = await verify_execution(outcomes, DatabaseSources(conn), on_layer=layer_finished)
         rows = tuple(row for tool in outcomes for row in tool.evidence)
         status, verdict = await record_verification(conn, identifier, report, rows)
 
@@ -323,6 +408,13 @@ async def answer(
 
 
 # --------------------------------------------------------------------------
+
+
+def _window(period: IntentPeriod | None) -> dict[str, str] | None:
+    """A window as two ISO strings, or nothing. Never a guessed default."""
+    if period is None:
+        return None
+    return {"from": period.from_.isoformat(), "to": period.to.isoformat()}
 
 
 async def _fail(

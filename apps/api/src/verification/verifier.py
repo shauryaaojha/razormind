@@ -34,7 +34,8 @@ happen before the records are resolved, which is why it lives at the bottom
 (D-41).
 """
 
-from collections.abc import Iterable, Mapping, Sequence
+import time
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -52,11 +53,21 @@ from .sources import SourceRecord, SourceResolver, UnknownRecordSetError
 
 __all__ = [
     "LAYERS",
+    "LayerObserver",
     "LayerResult",
     "ToolOutcome",
     "VerificationReport",
     "verify_execution",
 ]
+
+#: Called as each layer finishes, with the layer's result and how long it took.
+#:
+#: A callback rather than an import of the event log, for the same reason
+#: ``EventLog.on_event`` is one: the trust plane may not depend on the
+#: orchestrator, and a verifier that knew how to write an event would be a
+#: verifier with an opinion about who is watching. Nothing here waits on the
+#: observer's answer -- it is told, and the next layer runs.
+type LayerObserver = Callable[[LayerResult, int], Awaitable[None]]
 
 #: In order. Position is meaning: a failure at position *n* means layers after
 #: *n* did not run, not that they passed.
@@ -157,7 +168,10 @@ class _Layer:
 
 
 async def verify_execution(
-    outcomes: Sequence[ToolOutcome], sources: SourceResolver
+    outcomes: Sequence[ToolOutcome],
+    sources: SourceResolver,
+    *,
+    on_layer: LayerObserver | None = None,
 ) -> VerificationReport:
     """Run the layers in order and stop at the first that fails.
 
@@ -165,29 +179,51 @@ async def verify_execution(
     the records would have to skip layer 5, and an execution that skipped a
     layer is not a verified execution -- it is an unverified one with a longer
     report.
+
+    ``on_layer`` is optional and changes nothing about the verdict. It exists so
+    that a watcher sees the layers arrive one at a time, in order, as they
+    actually finish -- which is the property this module is *about*. Reporting
+    five layers at the end would leave a UI with two choices, both wrong:
+    animate them on a timer, which invents durations nobody measured, or show
+    them appearing all at once, which shows the layers as a summary rather than
+    as a sequence that stops.
     """
     rows = tuple(row for outcome in outcomes for row in outcome.evidence)
-
     completed: list[LayerResult] = []
-    for layer in (_type_layer(outcomes, rows), _range_layer(rows)):
-        completed.append(layer)
-        if not layer.passed:
-            return VerificationReport(tuple(completed))
 
+    async def ran(layer: LayerResult, since: int) -> bool:
+        """Record a finished layer, announce it, and say whether to go on."""
+        completed.append(layer)
+        if on_layer is not None:
+            await on_layer(layer, (time.perf_counter_ns() - since) // 1_000_000)
+        return layer.passed
+
+    at = time.perf_counter_ns()
+    if not await ran(_type_layer(outcomes, rows), at):
+        return VerificationReport(tuple(completed))
+
+    at = time.perf_counter_ns()
+    if not await ran(_range_layer(rows), at):
+        return VerificationReport(tuple(completed))
+
+    at = time.perf_counter_ns()
     try:
         published = EvidenceSet(rows)
     except DuplicateEvidenceError as error:
         clash = _Layer("CONSISTENCY")
         clash.fail("evidence_ids_are_unique", str(error))
-        completed.append(clash.result())
+        await ran(clash.result(), at)
         return VerificationReport(tuple(completed))
 
-    for layer in (_consistency_layer(published), _formula_layer(published)):
-        completed.append(layer)
-        if not layer.passed:
-            return VerificationReport(tuple(completed))
+    if not await ran(_consistency_layer(published), at):
+        return VerificationReport(tuple(completed))
 
-    completed.append(await _source_layer(published, sources))
+    at = time.perf_counter_ns()
+    if not await ran(_formula_layer(published), at):
+        return VerificationReport(tuple(completed))
+
+    at = time.perf_counter_ns()
+    await ran(await _source_layer(published, sources), at)
     return VerificationReport(tuple(completed))
 
 

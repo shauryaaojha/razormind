@@ -122,14 +122,27 @@ async def execute_plan(
     produced: dict[str, BaseModel] = {}
     started = time.monotonic()
 
-    for layer in plan.topological_layers():
+    for tier, layer in enumerate(plan.topological_layers()):
         runnable, skipped = _split(layer, outcome)
         for node in skipped:
-            outcome.results.append(_skipped(node, outcome))
+            result = _skipped(node, outcome)
+            outcome.results.append(result)
             await log.append(
                 log_conn,
                 "node.finished",
-                {"node": node.id, "tool": node.tool, "status": "SKIPPED"},
+                {
+                    "node": node.id,
+                    "tool": node.tool,
+                    "status": "SKIPPED",
+                    "layer": tier,
+                    # Which dead dependency cost this node. Without it a skipped
+                    # node in the trace is an unexplained gap, and the reader is
+                    # left to infer the edge that killed it from the shape.
+                    "code": None if result.error is None else result.error["code"],
+                    "blocked_by": (
+                        [] if result.error is None else result.error["detail"]["blocked_by"]
+                    ),
+                },
             )
 
         if not runnable:
@@ -140,7 +153,22 @@ async def execute_plan(
             break
 
         for node in runnable:
-            await log.append(log_conn, "node.started", {"node": node.id, "tool": node.tool})
+            await log.append(
+                log_conn,
+                "node.started",
+                {
+                    "node": node.id,
+                    "tool": node.tool,
+                    "version": node.version,
+                    "depends_on": list(node.depends_on),
+                    "required": node.required,
+                    # Everything in one tier starts on the same event and runs
+                    # at once. Saying which tier is what lets a watcher see the
+                    # concurrency the plan exists to express, rather than four
+                    # tools that happen to finish close together.
+                    "layer": tier,
+                },
+            )
         # The layer runs at once. This is the concurrency the plan exists to
         # express: the four analyses share a dependency and nothing else.
         results = await asyncio.gather(
@@ -162,6 +190,18 @@ async def execute_plan(
                     "tool": result.tool,
                     "status": result.status,
                     "duration_ms": result.duration_ms,
+                    "layer": tier,
+                    # What was computed, and deliberately never what it
+                    # computed. These rows have not been verified -- that is the
+                    # next stage -- and a trace carrying their values would put
+                    # unverified figures on screen in the same typeface as
+                    # verified ones, which is the thing Invariant 4 forbids at
+                    # the end of a run and has no reason to permit in the middle
+                    # of one. Names and a count are enough to watch the work
+                    # happen; the numbers arrive once they have been checked.
+                    "metrics": sorted({row.metric_id for row in result.evidence}),
+                    "evidence_rows": len(result.evidence),
+                    "code": None if result.error is None else result.error["code"],
                 },
             )
             if not result.succeeded and _node(plan, result.node_id).required:

@@ -267,3 +267,52 @@ class TestValidation:
         assert rendered["status"] == "rejected"
         assert rendered["code"] == "MERCHANT_SCOPE_VIOLATION"
         assert rendered["detail"] == {"requested": "M999", "authorised": MERCHANT}
+
+
+class TestTheGatePanel:
+    """The gates a run reports, which is what a reader watching it sees.
+
+    An approved plan used to leave no trace of the validation at all: the
+    outcome carried refusals, and there were none. "Eleven gates ran and none of
+    them objected" is the interesting sentence, and it was unsayable.
+    """
+
+    def test_every_gate_is_reported_whether_or_not_it_fired(self) -> None:
+        outcome = validate_plan(build_plan(intent()), POLICY, REGISTRY)
+        assert outcome.approved
+        assert tuple(gate.code for gate in outcome.gates) == REJECTION_CODES
+        assert all(gate.passed for gate in outcome.gates)
+
+    def test_a_gate_with_nothing_to_judge_is_inapplicable_not_passed(self) -> None:
+        """A plan with one window has no overlap to check.
+
+        Reporting the overlap gate as passed would claim a check that never
+        ran, which is the same class of thing as a hardcoded figure -- smaller,
+        and in the panel whose entire job is to be believed.
+        """
+        single = build_plan(intent("reconciliation_status", comparison_period=None))
+        applied = {
+            gate.code: gate.applied for gate in validate_plan(single, POLICY, REGISTRY).gates
+        }
+        assert applied["OVERLAPPING_PERIODS"] is False
+        assert applied["INVALID_PERIOD"] is True
+        # Reconciliation takes no reference: it is the node everything else
+        # reads from, so there is no upstream value to resolve.
+        assert applied["UNRESOLVED_INPUT_REFERENCE"] is False
+
+    def test_a_refused_gate_is_the_only_one_marked_failed(self) -> None:
+        plan = build_plan(intent())
+        outcome = validate_plan(plan.model_copy(update={"currency": "USD"}), POLICY, REGISTRY)
+        failed = [gate.code for gate in outcome.gates if not gate.passed]
+        assert failed == ["UNSUPPORTED_CURRENCY"]
+        assert not outcome.approved
+
+    def test_a_backwards_window_is_not_then_asked_whether_it_is_in_range(self) -> None:
+        """The coverage answer would be about a range that does not exist."""
+        backwards = IntentPeriod(**{"from": date(2026, 8, 24), "to": date(2026, 8, 1)})
+        plan = build_plan(intent()).model_copy(update={"period": backwards})
+        gates = {gate.code: gate for gate in validate_plan(plan, POLICY, REGISTRY).gates}
+        assert gates["INVALID_PERIOD"].passed is False
+        # Applied for the comparison window, which is well-formed, and not for
+        # the backwards one.
+        assert gates["PERIOD_OUT_OF_RANGE"].passed is True

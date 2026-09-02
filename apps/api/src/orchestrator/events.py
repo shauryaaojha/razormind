@@ -31,11 +31,25 @@ __all__ = ["EVENT_KINDS", "EventLog", "RecordedEvent"]
 EVENT_KINDS: tuple[str, ...] = (
     "execution.created",
     "state.changed",
+    # What the model understood, and what it cost. The entire surface through
+    # which a model influences an execution is an intent type and two windows,
+    # and a reader who cannot see that surface has to take the claim on trust.
+    "intent.parsed",
     "plan.built",
+    # Which of the eleven gates were applicable, and which of them passed.
+    # Emitted on approval as well as on rejection: "eleven gates ran and none
+    # objected" is the event, and a log that only records refusals cannot say
+    # it.
+    "plan.validated",
     "plan.rejected",
     "clarification.requested",
     "node.started",
     "node.finished",
+    # One per layer, as each finishes, with its own check count and duration.
+    # The order and the stopping are the contract (docs/06-trust-layer.md), so
+    # they are observable rather than summarised: a run blocked at RANGE emits
+    # two of these and not five.
+    "verification.layer",
     "verification.finished",
     # Where the answer came from, how many attempts it took, and why the
     # template was used if it was. The one event a reader consults to decide

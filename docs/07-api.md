@@ -93,31 +93,57 @@ being spent on purpose rather than discovered.
 
 ```text
 event: state
-data: {"seq":1,"status":"PLANNING","at":"2026-08-26T09:00:01Z"}
+data: {"seq":1,"kind":"state.changed","from":"PENDING","to":"PLANNING"}
 
 event: stage
-data: {"seq":2,"stage":"intent_detected","detail":{"intent":"revenue_diagnosis","confidence":0.92}}
+data: {"seq":2,"kind":"intent.parsed","intent":"revenue_diagnosis","period":{"from":"2026-07-01",
+       "to":"2026-08-01"},"confidence_ratio":"0.990000","model":"gemini-flash-lite-latest"}
 
 event: stage
-data: {"seq":3,"stage":"plan_validated","detail":{"nodes":5}}
+data: {"seq":3,"kind":"plan.built","nodes":["reconcile","revenue"],"graph":[{"id":"revenue",
+       "tool":"finance.revenue_analysis","depends_on":["reconcile"],"required":false,"layer":1}]}
+
+event: stage
+data: {"seq":5,"kind":"plan.validated","approved":true,"refused":[],
+       "gates":[{"code":"OVERLAPPING_PERIODS","applied":false,"passed":true}]}
 
 event: tool
-data: {"seq":4,"tool":"finance.reconciliation","status":"COMPLETED","duration_ms":812}
+data: {"seq":7,"kind":"node.started","node":"revenue","tool":"finance.revenue_analysis","layer":1}
 
 event: tool
-data: {"seq":5,"tool":"payments.failure_analysis","status":"UNAVAILABLE","code":"TOOL_TIMEOUT"}
+data: {"seq":8,"kind":"node.finished","node":"revenue","status":"SUCCEEDED","duration_ms":213,
+       "metrics":["net_revenue_paise","gross_payments_paise"],"evidence_rows":19,"code":null}
+
+event: verification
+data: {"seq":12,"kind":"verification.layer","layer":"FORMULA","index":3,"of":5,"checks":184,
+       "failures":[],"passed":true,"duration_ms":6}
 
 event: state
-data: {"seq":9,"status":"COMPLETED","response_source":"LLM"}
+data: {"seq":18,"kind":"execution.finished","status":"COMPLETED"}
 ```
 
-| `kind` | Payload |
-| --- | --- |
-| `state` | Status transition |
-| `stage` | Named milestone inside a state |
-| `tool` | Per-node start/finish/failure |
-| `verification` | Check results, and the blocking check on failure |
-| `token` | Optional streamed explanation text |
+The `event:` field is the coarse channel a client subscribes to; the exact kind travels in the
+payload, and `orchestrator/events.py` holds the closed list of them.
+
+| `event:` | Kinds | Carries |
+| --- | --- | --- |
+| `state` | `state.changed`, `execution.finished` | Status transitions |
+| `stage` | `execution.created`, `intent.parsed`, `plan.built`, `plan.validated`, `plan.rejected`, `clarification.requested`, `explanation.grounded` | Milestones inside a state |
+| `tool` | `node.started`, `node.finished` | Per-node start, finish, failure, skip |
+| `verification` | `verification.layer`, `verification.finished` | One frame per layer as it finishes, then the verdict |
+
+**A `node.finished` frame names the metrics a tool published and never carries their values.**
+Those rows have not been through a single verification layer at that point in the run, and a
+stream that carried them would let a client put unverified figures on screen in the same typeface
+as verified ones — which is the thing Invariant 4 forbids at the end of a run and has no reason to
+permit in the middle of one. Figures reach a client through `GET /executions/{id}/evidence`, which
+409s on a blocked execution.
+
+**A `plan.validated` frame is emitted on approval as well as on refusal**, and lists every gate
+with whether it was *applicable*. "There was nothing here to check" and "this was not checked" are
+different sentences, and only one of them is reassuring: a plan with a single window has no
+overlap to test, and a panel that showed `OVERLAPPING_PERIODS` as passed would be claiming a check
+that never ran.
 | `error` | Terminal error |
 
 Heartbeat comment every 15s so proxies do not close the connection.
