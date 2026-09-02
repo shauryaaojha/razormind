@@ -1353,3 +1353,70 @@ not assume the tools agree on a calendar.
 
 **Cost to reverse.** The token layer, high and pointless: it deletes 273 decisions. The three data
 fixes, not reversible — they were defects.
+
+
+## D-60 — the trace reports the run's internals, and no figure before verification
+
+**Decision.** The event log gained three kinds — `intent.parsed`, `plan.validated`,
+`verification.layer` — and richer payloads on `plan.built`, `node.started` and `node.finished`.
+The web trace renders each stage from the event that stage emitted, so a stage that did nothing
+renders nothing.
+
+**Why.** A five-row stepper describes the pipeline correctly and shows nothing about it. Everything
+that makes this system worth looking at was happening behind a badge that said `done`: eleven gates
+being applied before anything ran, four analyses starting on one event and running at once, five
+verification layers finishing in order with the first failure stopping the rest, a model being made
+to rewrite a sentence whose figure did not match its row. A reader watching a run had to take all
+of it on trust, which is a strange position for a product whose entire claim is that nothing needs
+to be taken on trust.
+
+The alternative — a UI that animates a fixed diagram of the pipeline on a timer — is worse than no
+diagram. It looks identical whether the gates ran or not, and identical whether the run is
+progressing or has hung. So every panel is driven by a payload: eleven gates because the validator
+reported eleven, two layers because the run stopped at layer two.
+
+**`verification.layer` is one event per layer, as each finishes.** The verifier gained an optional
+`on_layer` observer — a callback, not an import of the event log, so the trust plane still does not
+depend on the orchestrator. Reporting five layers at the end would leave the UI two choices, both
+wrong: animate them on a timer, inventing durations nobody measured, or show them arriving at once,
+which renders a *sequence that stops* as a summary.
+
+**`node.finished` names the metrics a tool published and never their values.** Those rows have not
+been verified — that is the next stage. A trace carrying them would put unverified figures on
+screen in the same typeface as verified ones, which is the thing Invariant 4 forbids at the end of
+a run and has no reason to permit in the middle of one. Names and a count are enough to watch the
+work happen. A web test asserts it: mid-run, the rendered trace contains no `₹` anywhere.
+
+**`plan.validated` reports applicability, not just refusals.** A gate with nothing to judge is
+reported as inapplicable rather than passed. Showing `OVERLAPPING_PERIODS` green on a plan with one
+window would be claiming a check that never ran, which is the same class of dishonesty as a
+hardcoded figure — smaller, and in the panel whose whole job is to be believed.
+
+**Cost to reverse.** Low for the frontend. The event kinds are additive and the tuple is closed, so
+removing one is a schema change plus whatever reads it; the payload growth on `node.finished` is
+the only storage cost, and it is metric names.
+
+## D-61 — the theme is derived from Blade's tokens, not transcribed from the design file
+
+**Decision.** `apps/web/lib/theme.ts` reads every colour and shadow from
+`@razorpay/blade/tokens` — `bladeTheme.colors.onLight` / `onDark` and `elevation` — instead of
+holding hex literals. The semantic mapping (which Blade token is "the card", which is "muted
+text") stays written out per scheme.
+
+**Why.** The Blade Figma library and the `@razorpay/blade` package are two renderings of one
+palette. A hex typed into this file from the first is a third rendering: correct on the day it was
+typed and quietly wrong after the next brand refresh, with nothing to catch the drift. Reading the
+package is the same palette with no transcription step.
+
+**Why the mapping is still written out per scheme.** Blade's grey ramp is not ordered the same way
+in both: on light, `gray.intense` is white and belongs to a card; on dark it is the lightest grey
+and belongs to a hover. A single mapping by token name would put a card on the wrong step in one of
+the two schemes — which is exactly the failure D-59's "both schemes, together" rule exists to make
+visible.
+
+The logo moved onto the same tokens. A mark is the one place an app can reasonably keep its own
+colours, which is why it is the place they get left behind: it was still holding `#0C83FF` after
+the rest of the app had stopped using it.
+
+**Cost to reverse.** Trivial — the exported `Palette` shape did not change, so nothing outside this
+file knows where the values come from.

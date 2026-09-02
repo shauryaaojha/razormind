@@ -20,6 +20,7 @@ import { ChevronRight, Database, ShieldCheck } from "lucide-react";
 import React, { useEffect, useState } from "react";
 
 import { useTheme } from "@/app/providers";
+import { Calculation } from "@/components/Calculation";
 import { Mono, Pill, Row, SectionLabel, Stack } from "@/components/ui";
 import { readEvidence } from "@/lib/api";
 import { numeric, radius, space } from "@/lib/theme";
@@ -235,7 +236,13 @@ export function Level({ node, depth }: { node: ProvenanceLevel; depth: number })
         <Pill tone={derived ? "info" : "neutral"}>{derived ? "derived" : "fold"}</Pill>
       </Row>
 
-      <span style={{ fontSize: "11.5px", color: t.textMuted, lineHeight: 1.5 }}>{node.detail}</span>
+      {derived ? (
+        <Calculation node={node} />
+      ) : (
+        <span style={{ fontSize: "11.5px", color: t.textMuted, lineHeight: 1.5 }}>
+          {node.detail}
+        </span>
+      )}
       <span style={{ fontSize: "11px", color: t.textFaint }}>
         {node.tool_name} · [{node.period_from}, {node.period_to})
       </span>

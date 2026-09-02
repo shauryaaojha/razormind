@@ -17,17 +17,58 @@ import { useTheme } from "@/app/providers";
 import { ExecutionView } from "@/components/ExecutionView";
 import { ProvenanceDrawer } from "@/components/ProvenanceDrawer";
 import { Shell } from "@/components/Shell";
-import { Panel, Row, Stack } from "@/components/ui";
+import { Panel, Row, SectionLabel, Stack } from "@/components/ui";
 import { USER_ID, eventStreamUrl, readExecution, startRun } from "@/lib/api";
 import { readEventStream, type StreamHandle, type TraceEvent } from "@/lib/stream";
 import { radius, space, transition } from "@/lib/theme";
 import { isFinished } from "@/lib/trace";
 
-const SUGGESTIONS = [
-  "Why did net revenue fall in July 2026 compared with June 2026?",
-  "How is reconciliation looking for July 2026?",
-  "What happened to our payment success rate in July 2026?",
-  "Which refund reasons drove the most value in July 2026?",
+/**
+ * One question per analysis the planner knows how to route, and two that are
+ * meant to be refused.
+ *
+ * The refusals are on the page rather than tucked into a demo script because
+ * they are the half of the behaviour that is hard to believe: a system that
+ * answers is ordinary, and a system that declines to answer — with nothing
+ * computed and a code saying why — is the part worth being able to try. The
+ * captions describe the *question*, not the outcome; what actually happens
+ * shows up in the trace below, whatever it is.
+ */
+const GALLERY: { label: string; hint: string; items: { text: string; note: string }[] }[] = [
+  {
+    label: "Ask",
+    hint: "Each of these routes to a different analysis.",
+    items: [
+      {
+        text: "Why did net revenue fall in July 2026 compared with June 2026?",
+        note: "the full bridge — four tools",
+      },
+      { text: "How is reconciliation looking for July 2026?", note: "one tool, no comparison" },
+      {
+        text: "What happened to our payment success rate in July 2026 against June 2026?",
+        note: "decline taxonomy by method",
+      },
+      {
+        text: "Which refund reasons drove the most value in July 2026 compared with June 2026?",
+        note: "refunds by reason",
+      },
+      {
+        text: "How did chargebacks move in July 2026 against June 2026?",
+        note: "disputes and their value",
+      },
+    ],
+  },
+  {
+    label: "Watch it refuse",
+    hint: "Nothing runs, nothing is computed, and the run says which gate stopped it.",
+    items: [
+      { text: "Why did net revenue fall?", note: "no comparison window given" },
+      {
+        text: "How did revenue do in August 2024 compared with July 2024?",
+        note: "outside the seeded data",
+      },
+    ],
+  },
 ];
 
 export default function AskPage() {
@@ -169,42 +210,60 @@ export default function AskPage() {
               borderBottomRightRadius: radius.lg,
             }}
           >
-            <Row gap={2}>
-              {SUGGESTIONS.map((suggestion) => (
-                <button
-                  key={suggestion}
-                  type="button"
-                  disabled={busy}
-                  onClick={() => {
-                    setQuestion(suggestion);
-                    void ask(suggestion);
-                  }}
-                  style={{
-                    padding: `${space(1.5)} ${space(3)}`,
-                    borderRadius: radius.pill,
-                    fontSize: "12px",
-                    fontWeight: 500,
-                    border: `1px solid ${t.border}`,
-                    backgroundColor: t.surface,
-                    color: t.textMuted,
-                    cursor: busy ? "not-allowed" : "pointer",
-                    opacity: busy ? 0.5 : 1,
-                    transition: `border-color ${transition.fast}, color ${transition.fast}`,
-                  }}
-                  onMouseEnter={(event) => {
-                    if (busy) return;
-                    event.currentTarget.style.borderColor = t.accentBorder;
-                    event.currentTarget.style.color = t.text;
-                  }}
-                  onMouseLeave={(event) => {
-                    event.currentTarget.style.borderColor = t.border;
-                    event.currentTarget.style.color = t.textMuted;
-                  }}
-                >
-                  {suggestion}
-                </button>
+            <Stack gap={3}>
+              {GALLERY.map((group) => (
+                <Stack key={group.label} gap={2}>
+                  <Row gap={2}>
+                    <SectionLabel>{group.label}</SectionLabel>
+                    <span style={{ fontSize: "11px", color: t.textFaint }}>{group.hint}</span>
+                  </Row>
+                  <Row gap={2}>
+                    {group.items.map((item) => (
+                      <button
+                        key={item.text}
+                        type="button"
+                        disabled={busy}
+                        title={item.note}
+                        onClick={() => {
+                          setQuestion(item.text);
+                          void ask(item.text);
+                        }}
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "flex-start",
+                          gap: space(0.5),
+                          padding: `${space(2)} ${space(3)}`,
+                          borderRadius: radius.md,
+                          font: "inherit",
+                          fontSize: "12px",
+                          fontWeight: 500,
+                          textAlign: "left",
+                          border: `1px solid ${t.border}`,
+                          backgroundColor: t.surface,
+                          color: t.textMuted,
+                          cursor: busy ? "not-allowed" : "pointer",
+                          opacity: busy ? 0.5 : 1,
+                          transition: `border-color ${transition.fast}, color ${transition.fast}`,
+                        }}
+                        onMouseEnter={(event) => {
+                          if (busy) return;
+                          event.currentTarget.style.borderColor = t.accentBorder;
+                          event.currentTarget.style.color = t.text;
+                        }}
+                        onMouseLeave={(event) => {
+                          event.currentTarget.style.borderColor = t.border;
+                          event.currentTarget.style.color = t.textMuted;
+                        }}
+                      >
+                        <span>{item.text}</span>
+                        <span style={{ fontSize: "10.5px", color: t.textFaint }}>{item.note}</span>
+                      </button>
+                    ))}
+                  </Row>
+                </Stack>
               ))}
-            </Row>
+            </Stack>
           </div>
         </Stack>
       </Panel>

@@ -3,13 +3,24 @@
  *
  * Before this file the app held 273 literal hex values and 125 `isDark ? a : b`
  * ternaries, which is not a theme -- it is 125 independent decisions about what
- * "muted text" means, and they had already drifted apart. Nothing below
- * `useTokens()` should contain a `#`.
+ * "muted text" means, and they had already drifted apart. Nothing outside this
+ * file should contain a `#`.
  *
- * Blade still owns the *components*. This owns the surface they sit on: the
- * page background, the card, the border, the eight status tints, and the
- * numeric type treatment. Blade has no opinion about those because they are the
- * application's, not the design system's.
+ * **Every colour below is Blade's**, read from `@razorpay/blade/tokens` rather
+ * than copied out of the design file. The Figma library and this package are
+ * two renderings of one palette, and a hex typed in here from the first would
+ * be a third -- correct on the day it was typed and quietly wrong after the
+ * next brand refresh. Blade already owns the components; this file is the
+ * mapping from Blade's palette onto the surfaces those components sit on --
+ * the page background, the card, the border, the eight status tints -- which
+ * Blade has no opinion about because they are the application's, not the design
+ * system's.
+ *
+ * The mapping is written out per scheme instead of by token name, because
+ * Blade's grey ramp is not ordered the same way in both: on light, `intense` is
+ * white and belongs to a card, while on dark it is the lightest grey and
+ * belongs to a hover. Naming the role on each side is what keeps a token that
+ * reads correctly in one scheme from being invisible in the other.
  *
  * Two rules for anything added here:
  *
@@ -20,6 +31,8 @@
  *   for light on adjacent lines, so a token that looks right in one and
  *   invisible in the other is visible here rather than in a screenshot.
  */
+
+import { bladeTheme, elevation } from "@razorpay/blade/tokens";
 
 export type Scheme = "dark" | "light";
 
@@ -71,75 +84,99 @@ export interface Palette {
   shadowAccent: string;
 }
 
-const RAZORPAY_BLUE = "#0C83FF";
+const DARK_TOKENS = bladeTheme.colors.onDark;
+const LIGHT_TOKENS = bladeTheme.colors.onLight;
+
+/**
+ * The same colour at a different opacity.
+ *
+ * Blade publishes `hsla(...)` strings, so a translucent variant is the token
+ * with its last component replaced -- not a second colour that has to be kept
+ * in step with the first by hand.
+ */
+function alpha(hsla: string, opacity: number): string {
+  return hsla.replace(/,\s*[\d.]+\)$/, `, ${opacity})`);
+}
 
 const DARK: Palette = {
-  canvas: "#080B11",
-  canvasTranslucent: "rgba(8, 11, 17, 0.82)",
-  surface: "#0E131F",
-  surfaceHover: "#141C2B",
-  sunken: "#070A10",
+  canvas: DARK_TOKENS.surface.background.gray.moderate,
+  canvasTranslucent: alpha(DARK_TOKENS.surface.background.gray.moderate, 0.82),
+  surface: DARK_TOKENS.surface.background.gray.subtle,
+  surfaceHover: DARK_TOKENS.surface.background.gray.intense,
+  // One step *below* the card rather than above it, which on a dark scheme is
+  // the page's own colour.
+  sunken: DARK_TOKENS.surface.background.gray.moderate,
 
-  border: "#1C2434",
-  borderStrong: "#2A3547",
+  border: DARK_TOKENS.surface.border.gray.subtle,
+  borderStrong: DARK_TOKENS.surface.border.gray.normal,
 
-  text: "#F1F5F9",
-  textMuted: "#94A3B8",
-  textFaint: "#64748B",
-  textOnAccent: "#FFFFFF",
+  text: DARK_TOKENS.surface.text.gray.normal,
+  textMuted: DARK_TOKENS.surface.text.gray.subtle,
+  textFaint: DARK_TOKENS.surface.text.gray.muted,
+  textOnAccent: DARK_TOKENS.surface.text.staticWhite.normal,
 
-  accent: RAZORPAY_BLUE,
-  accentHover: "#3D9BFF",
-  accentSoft: "rgba(12, 131, 255, 0.13)",
-  accentBorder: "rgba(12, 131, 255, 0.32)",
+  accent: DARK_TOKENS.interactive.background.primary.default,
+  accentHover: DARK_TOKENS.interactive.text.primary.normal,
+  accentSoft: DARK_TOKENS.interactive.background.primary.faded,
+  accentBorder: DARK_TOKENS.interactive.background.primary.fadedHighlighted,
 
-  positive: "#34D399",
-  positiveSoft: "rgba(52, 211, 153, 0.12)",
-  negative: "#F87171",
-  negativeSoft: "rgba(248, 113, 113, 0.12)",
-  warning: "#FBBF24",
-  warningSoft: "rgba(251, 191, 36, 0.12)",
-  info: "#60A5FA",
-  infoSoft: "rgba(96, 165, 250, 0.12)",
+  positive: DARK_TOKENS.feedback.text.positive.intense,
+  positiveSoft: DARK_TOKENS.feedback.background.positive.subtle,
+  negative: DARK_TOKENS.feedback.text.negative.intense,
+  negativeSoft: DARK_TOKENS.feedback.background.negative.subtle,
+  warning: DARK_TOKENS.feedback.text.notice.intense,
+  warningSoft: DARK_TOKENS.feedback.background.notice.subtle,
+  info: DARK_TOKENS.feedback.text.information.intense,
+  infoSoft: DARK_TOKENS.feedback.background.information.subtle,
 
-  shadow: "0 1px 2px rgba(0,0,0,0.4), 0 8px 24px -12px rgba(0,0,0,0.6)",
-  shadowRaised: "0 8px 40px -8px rgba(0,0,0,0.7)",
-  shadowAccent: "0 2px 12px -2px rgba(12, 131, 255, 0.45)",
+  shadow: elevation.onDark.lowRaised,
+  shadowRaised: elevation.onDark.highRaised,
+  shadowAccent: `0 2px 12px -2px ${alpha(
+    DARK_TOKENS.interactive.background.primary.default,
+    0.45,
+  )}`,
 };
 
 const LIGHT: Palette = {
-  canvas: "#F7F9FC",
-  canvasTranslucent: "rgba(247, 249, 252, 0.82)",
-  surface: "#FFFFFF",
-  surfaceHover: "#F1F5F9",
-  sunken: "#F1F5F9",
+  canvas: LIGHT_TOKENS.surface.background.gray.subtle,
+  canvasTranslucent: alpha(LIGHT_TOKENS.surface.background.gray.subtle, 0.82),
+  // White, so a card lifts off the grey page. The dark scheme's ordering is the
+  // other way round, which is why these are written per scheme.
+  surface: LIGHT_TOKENS.surface.background.gray.intense,
+  surfaceHover: LIGHT_TOKENS.feedback.background.neutral.subtle,
+  sunken: LIGHT_TOKENS.surface.background.gray.moderate,
 
-  border: "#E3E8EF",
-  borderStrong: "#CBD5E1",
+  border: LIGHT_TOKENS.surface.border.gray.subtle,
+  borderStrong: LIGHT_TOKENS.surface.border.gray.normal,
 
-  text: "#0F172A",
-  textMuted: "#5A6B85",
-  textFaint: "#8695AB",
-  textOnAccent: "#FFFFFF",
+  text: LIGHT_TOKENS.surface.text.gray.normal,
+  textMuted: LIGHT_TOKENS.surface.text.gray.muted,
+  textFaint: LIGHT_TOKENS.surface.text.gray.disabled,
+  textOnAccent: LIGHT_TOKENS.surface.text.staticWhite.normal,
 
-  accent: "#0A6FD8",
-  accentHover: "#0C83FF",
-  accentSoft: "rgba(12, 131, 255, 0.09)",
-  accentBorder: "rgba(12, 131, 255, 0.28)",
+  // The *text* primary on light, not the background one: this colour is read as
+  // often as it is pressed, and the background token is a shade too bright to
+  // sit under body copy.
+  accent: LIGHT_TOKENS.interactive.text.primary.normal,
+  accentHover: LIGHT_TOKENS.interactive.background.primary.default,
+  accentSoft: LIGHT_TOKENS.interactive.background.primary.faded,
+  accentBorder: LIGHT_TOKENS.interactive.background.primary.fadedHighlighted,
 
-  // Darker than the dark scheme's: these sit on white and have to pass as text.
-  positive: "#047857",
-  positiveSoft: "rgba(4, 120, 87, 0.09)",
-  negative: "#BE123C",
-  negativeSoft: "rgba(190, 18, 60, 0.08)",
-  warning: "#B45309",
-  warningSoft: "rgba(180, 83, 9, 0.10)",
-  info: "#1D4ED8",
-  infoSoft: "rgba(29, 78, 216, 0.08)",
+  positive: LIGHT_TOKENS.feedback.text.positive.intense,
+  positiveSoft: LIGHT_TOKENS.feedback.background.positive.subtle,
+  negative: LIGHT_TOKENS.feedback.text.negative.intense,
+  negativeSoft: LIGHT_TOKENS.feedback.background.negative.subtle,
+  warning: LIGHT_TOKENS.feedback.text.notice.intense,
+  warningSoft: LIGHT_TOKENS.feedback.background.notice.subtle,
+  info: LIGHT_TOKENS.feedback.text.information.intense,
+  infoSoft: LIGHT_TOKENS.feedback.background.information.subtle,
 
-  shadow: "0 1px 2px rgba(15,23,42,0.04), 0 8px 24px -16px rgba(15,23,42,0.16)",
-  shadowRaised: "0 12px 48px -12px rgba(15,23,42,0.22)",
-  shadowAccent: "0 2px 12px -2px rgba(12, 131, 255, 0.35)",
+  shadow: elevation.onLight.lowRaised,
+  shadowRaised: elevation.onLight.highRaised,
+  shadowAccent: `0 2px 12px -2px ${alpha(
+    LIGHT_TOKENS.interactive.background.primary.default,
+    0.35,
+  )}`,
 };
 
 export const PALETTES: Record<Scheme, Palette> = { dark: DARK, light: LIGHT };
